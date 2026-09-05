@@ -96,8 +96,10 @@ export class Graph {
       for (const e of n.out) {
         const t = this.nodes.get(e.to)
         const addedEdge = !via && this.diff?.edges_added.some(([f, to]) => f === from && to === e.to) ? 'added' : undefined
-        if (t && opts.hideLayers?.has(t.layer) && t.id !== id && !seen.has(t.id)) {
-          if (t.out.length) { seen.add(t.id); walk(t.id, via ?? t, seen) } else push(e.to, e.label, e.class, e.when, via, addedEdge)
+        if (t && opts.hideLayers?.has(t.layer) && t.id !== id) {
+          if (seen.has(t.id)) continue
+          seen.add(t.id)
+          if (t.out.length) walk(t.id, via ?? t, seen); else push(e.to, e.label, e.class, e.when, via, addedEdge)
         } else push(e.to, e.label, e.class, e.when, via, addedEdge)
       }
     }
