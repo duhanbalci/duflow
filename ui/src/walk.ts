@@ -62,6 +62,9 @@ function applySets(n: Node | undefined) {
   }
 }
 
+/** Walk bileşeni animasyonlu ilerlemeyi buraya kaydeder; replay bunu kullanır. */
+export const nav = { go: (id: string) => go(id) }
+
 export function go(id: string) {
   state.hist.push(id)
   state.openGroups = new Set(); state.filter = ''
@@ -112,7 +115,7 @@ export function startReplay(path: string[], stepMs = 1500) {
     // katlı grupta hedef görünür olsun
     state.openGroups.add(target.split('.').slice(0, 2).join('.'))
     replayHover.value = target
-    window.setTimeout(() => { if (state.replay === r) { replayHover.value = ''; go(target) } }, Math.min(650, stepMs * 0.45))
+    window.setTimeout(() => { if (state.replay === r) { replayHover.value = ''; nav.go(target) } }, Math.min(650, stepMs * 0.45))
   }, stepMs)
   state.replay = { path, idx: 0, timer }
 }

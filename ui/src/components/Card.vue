@@ -78,7 +78,7 @@ const isRoot = computed(() => g.value?.roots.includes(props.id))
 .via { font-size: 11px; color: var(--api); border-top: 1px dashed var(--line); padding-top: 6px; margin-top: 2px; }
 .past { opacity: .55; cursor: pointer; }
 .past:hover { opacity: .9; }
-.now { border-color: var(--now); box-shadow: 0 0 0 4px var(--now-glow), var(--shadow); padding: 14px 16px; gap: 8px; cursor: default; }
+.now { border-color: var(--now); box-shadow: 0 0 0 4px var(--now-glow), var(--shadow); padding: 14px 16px; gap: 8px; cursor: default; transition: opacity .22s, border-color .3s, box-shadow .3s, padding .3s; }
 .now .id { font-size: 14px; }
 .now .desc { color: var(--text); font-size: 14px; }
 .meta { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 2px; }
@@ -89,8 +89,6 @@ const isRoot = computed(() => g.value?.roots.includes(props.id))
 .horizon { opacity: .28; pointer-events: none; }
 .removed { border-style: dashed; }
 .removed .id { text-decoration: line-through; text-decoration-color: var(--bad); }
-.card.enter { animation: enter .32s ease-out both; }
 .card.fade { animation: fade .28s ease-out both; }
-@keyframes enter { from { opacity: 0; transform: translateX(28px); } }
 @keyframes fade { from { opacity: 0; } }
 </style>

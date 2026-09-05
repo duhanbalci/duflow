@@ -250,6 +250,8 @@ kendimiz yazarız.
 
 ### 7.9 Vue uygulama notları
 
+- **Konveyör:** 5 eşit genişlikte slot; adım = sağ slota yeni içeriği statik çiz → bandı tek `translateX` ile kaydır → bitince state'i ilerlet ve bandı sıfırla. Kart bazlı FLIP terk edildi (mid-animasyon ölçümleri glitch üretiyordu).
+
 - Hover yerel `ref`; ufuk sütunu ona bağlı ayrı component. Hover'ı store'a koyma.
 - Kart `key` = `id@col`; izinli geçişte eski key taşınarak `<TransitionGroup>` FLIP'i kullanılır.
 - Teller ve etiketler tek SVG katmanında; animasyon bitince (transitionend) çizilir,

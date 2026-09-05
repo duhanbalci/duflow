@@ -42,6 +42,6 @@ cargo run -p duflow-cli -- -d ~/dev/duploy/flows validate
 - `edit.rs` biçim korur: `autoformat()` çağırma (tırnakları siler); string değerler `str_arg/str_prop/set_str` ile yazılır (`value_repr` tırnaklı).
 - ID→dosya kuralı: `a.b` → `a.kdl` ya da `a/b.kdl`; `a.b.c…` → `a/b.kdl` ya da `a.kdl` (`model::allowed_files`). `add` var olanı seçer.
 - Lint'te "erişilebilirlik" `on` ile dinlenen event'leri de kapsar (`Graph::listened_events`).
-- UI: hover **yerel** (Walk.vue), store'a koyma; FLIP yalnız izinli sütun geçişlerinde; teller ve etiketler tek SVG katmanında, giriş animasyonu bittikten sonra çizilir; aday sütunu (`overflow:auto`) dışına taşan hiçbir şey kartta olmasın.
+- UI Walk = **konveyör**: 5 eşit slot `[gizli-sol][geçmiş][şimdi][adaylar][ufuk/gelen]`, bant tek `translateX` ile kayar; ileri: seçilenin devamı sağ slota statik çizilir → kay → `go()` → bant sıfırlanır (görüntü aynı). Kart bazlı FLIP yok, animasyon sırasında ölçüm/çizim yok. Hover **yerel** (Walk.vue), store'a koyma; teller ve etiketler bant içindeki tek SVG'de; slot (`overflow:auto`) dışına taşan hiçbir şey kartta olmasın.
 - Export şeması değişirse `export.rs::SCHEMA_VERSION` ve `ui/src/graph.ts` tipleri birlikte.
 - Commit mesajları kısa, Conventional Commits, attribution yok.
