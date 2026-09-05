@@ -1,0 +1,11 @@
+[package]
+name = "duflow-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+kdl.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
