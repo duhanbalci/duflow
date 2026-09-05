@@ -8,7 +8,7 @@ use std::net::TcpListener;
 use std::path::Path;
 
 const TEMPLATE: &str = include_str!("../ui-dist/index.html");
-const PLACEHOLDER: &str = "__DUFLOW_DATA__";
+const PLACEHOLDER: &str = "/*DUFLOW_DATA*/null/*END*/";
 
 pub fn render(data_json: &str) -> String {
     // `</script>` kaçışı: JSON içinde geçerse script'i kapatmasın

@@ -1,0 +1,38 @@
+:root {
+  --bg: #f2f4f8; --surface: #ffffff; --surface2: #e9ecf3; --line: #d4d9e4; --text: #171a22; --muted: #6b7284; --faint: #a3a9b8;
+  --now: #171a22; --now-glow: rgba(23, 26, 34, .12);
+  --ui: #6a5cf5; --api: #0f9d8f; --domain: #c9821c; --bad: #c9463d; --good: #2c9a5b; --warn: #b8860b;
+  --edge: #b7bdcb; --edge-hot: #171a22;
+  --shadow: 0 18px 40px -20px rgba(0, 0, 0, .35);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1117; --surface: #161b25; --surface2: #1d2331; --line: #2a3141; --text: #e7eaf1; --muted: #8a91a4; --faint: #4f566a;
+    --now: #f3f4f8; --now-glow: rgba(243, 244, 248, .10);
+    --ui: #9d8cff; --api: #3fc7b3; --domain: #e9a94a; --bad: #ef6b62; --good: #4cc47a; --warn: #e3c35a;
+    --edge: #3a4256; --edge-hot: #e7eaf1;
+    --shadow: 0 18px 40px -20px rgba(0, 0, 0, .6);
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1117; --surface: #161b25; --surface2: #1d2331; --line: #2a3141; --text: #e7eaf1; --muted: #8a91a4; --faint: #4f566a;
+  --now: #f3f4f8; --now-glow: rgba(243, 244, 248, .10);
+  --ui: #9d8cff; --api: #3fc7b3; --domain: #e9a94a; --bad: #ef6b62; --good: #4cc47a; --warn: #e3c35a;
+  --edge: #3a4256; --edge-hot: #e7eaf1;
+  --shadow: 0 18px 40px -20px rgba(0, 0, 0, .6);
+}
+* { box-sizing: border-box; }
+html, body, #app { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--text); font: 14px/1.45 "Instrument Sans", system-ui, sans-serif; overflow: hidden; }
+.mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+button:focus-visible, .card:focus-visible, input:focus-visible { outline: 2px solid var(--ui); outline-offset: 2px; }
+input { font: inherit; color: var(--text); }
+.chip { font-size: 11px; padding: 2px 7px; border-radius: 5px; background: var(--surface2); color: var(--muted); white-space: nowrap; }
+.chip.check { color: var(--api); } .chip.set { color: var(--domain); } .chip.file { color: var(--faint); } .chip.attr { color: var(--muted); }
+.chip.added { color: var(--good); } .chip.removed { color: var(--bad); } .chip.changed { color: var(--warn); }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: 0 0 auto; }
+[data-layer="ui"] > .dot, [data-layer="ui"] .kind .dot { background: var(--ui); }
+[data-layer="api"] > .dot, [data-layer="api"] .kind .dot { background: var(--api); }
+[data-layer="domain"] > .dot, [data-layer="domain"] .kind .dot { background: var(--domain); }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
