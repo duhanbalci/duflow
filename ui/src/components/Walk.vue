@@ -68,6 +68,15 @@ function onClick(e: MouseEvent) {
 // ---- FLIP ----
 type Snap = { id: string; col: string; rect: DOMRect; html: string; layer: string }
 let pending: Snap[] | null = null
+/** FLIP/giriş animasyonu sürerken tel çizimi kilitli; bitince tek seferde çizilir. */
+let settleUntil = 0
+let settleTimer = 0
+function settle(ms: number) {
+  settleUntil = performance.now() + ms
+  if (wires.value) wires.value.style.opacity = '0'
+  clearTimeout(settleTimer)
+  settleTimer = window.setTimeout(() => { settleUntil = 0; drawWires() }, ms + 10)
+}
 const ALLOWED: Record<string, string[]> = { now: ['next', 'past'], past: ['now'], next: ['horizon', 'now'], horizon: [] }
 
 watch(() => state.hist.slice(), () => {
@@ -105,14 +114,14 @@ onUpdated(() => {
     requestAnimationFrame(() => requestAnimationFrame(() => { el.style.opacity = '0'; el.style.transform = 'translateY(18px) scale(.96)' }))
     setTimeout(() => el.remove(), 320)
   }
-  if (wires.value) wires.value.style.opacity = '0'
-  setTimeout(drawWires, 390)
+  settle(400)
 })
 
 // ---- teller + etiketler (SVG katmanı) ----
 function drawWires() {
   const svg = wires.value, st = stage.value, cl = cols.value
   if (!svg || !st || !cl) return
+  if (performance.now() < settleUntil) return
   const sr = st.getBoundingClientRect()
   const P = (el: Element) => { const r = el.getBoundingClientRect(); return { l: r.left - sr.left, r: r.right - sr.left, y: r.top - sr.top + r.height / 2 } }
   const q = (col: string, id: string) => cl.querySelector<HTMLElement>(`.col.${col} .card[data-id="${CSS.escape(id)}"]`)
@@ -160,7 +169,9 @@ onMounted(() => {
   cols.value?.addEventListener('scroll', drawWires, true)
 })
 onUnmounted(() => ro?.disconnect())
-watch([() => state.hiddenLayers, () => state.role, () => state.filter, () => state.openGroups, () => ({ ...state.vars })], () => nextTick(drawWires))
+watch([() => state.hiddenLayers, () => state.role, () => state.filter, () => state.openGroups], () => nextTick(drawWires))
+// değişken değişimi kart konumunu oynatmaz; sadece guard renkleri için yeniden çiz (kilit varsa settle sonunda zaten çizilir)
+watch(() => ({ ...state.vars }), () => nextTick(drawWires))
 </script>
 
 <template>
