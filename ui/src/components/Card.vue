@@ -17,8 +17,11 @@ const props = defineProps<{
 // ---- yükseklik animasyonu: içerik/stil değişince (col, cand, collapsed) eski → yeni ----
 const el = ref<HTMLElement>()
 let h0 = 0
-onBeforeUpdate(() => { h0 = el.value?.offsetHeight ?? 0 })
-onUpdated(() => animateHeight(h0))
+let prevKey = ''
+const shapeKey = () => `${props.id}|${props.col}|${props.collapsed ? 1 : 0}|${props.cand ? 1 : 0}`
+onBeforeUpdate(() => { h0 = el.value?.offsetHeight ?? 0; prevKey = shapeKey() })
+// yalnız aynı node'un stili/kapalılığı değişince animasyon; id değişimi (bileşen yeniden kullanımı) asla
+onUpdated(() => { const k = shapeKey(); if (k !== prevKey && k.split('|')[0] === prevKey.split('|')[0]) animateHeight(h0) })
 onMounted(() => { if (props.fromHeight) animateHeight(props.fromHeight); else if (props.collapsed && el.value) { el.value.style.height = '0px'; el.value.style.overflow = 'hidden' } })
 // Stil değişimleri (padding, font, kenarlık) anında uygulanır; yalnız yükseklik/opaklık/margin animasyonlu.
 // Hedef yükseklik, transition'lar kapalıyken ölçülür → ara değer ölçme hatası yok.

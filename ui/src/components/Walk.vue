@@ -170,15 +170,15 @@ const trackStyle = computed(() => ({
     <div class="track" ref="track" :style="trackStyle" @transitionend="onShiftEnd" @mouseover="onOver" @mouseleave="setHot('')" @click="onClick">
       <svg ref="wires" class="wires"></svg>
       <div class="slot left" data-slot="left">
-        <Card v-if="leftIn" :id="leftIn" col="past" />
+        <Card v-if="leftIn" :key="leftIn" :id="leftIn" col="past" />
       </div>
       <div class="slot past" data-slot="past">
-        <Card v-if="previous" :id="previous" :col="phase === 'back' ? 'now' : 'past'" />
+        <Card v-if="previous" :key="previous" :id="previous" :col="phase === 'back' ? 'now' : 'past'" />
         <div v-else class="empty">başlangıç</div>
       </div>
       <div class="slot now" data-slot="now">
         <CandList v-if="phase === 'back'" :cands="backCands" :selected="backSel" />
-        <Card v-else :id="current" :col="phase === 'fwd' ? 'past' : 'now'" />
+        <Card v-else :key="current" :id="current" :col="phase === 'fwd' ? 'past' : 'now'" />
       </div>
       <div class="slot next" data-slot="next" :class="{ dim: phase === 'back' }">
         <CandList :cands="nexts" :hot="hot" :selected="picked" interactive />
