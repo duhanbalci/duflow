@@ -21,7 +21,7 @@ const diff = computed(() => graph.value?.diff)
           <input v-if="editing === v.id" class="v mono edit" :value="state.vars[v.id]" :list="'dl-' + v.id" autofocus
             @keydown.enter="commit(v.id, $event)" @keydown.esc="editing = ''" @blur="commit(v.id, $event)" />
           <button v-else class="v mono" title="değeri değiştir (ya şöyle olsaydı)" @click="editing = v.id">{{ state.vars[v.id] ?? '—' }}</button>
-          <datalist v-if="v.values.length" :id="'dl-' + v.id"><option v-for="o in v.values" :key="o" :value="o" /></datalist>
+          <datalist v-if="v.values?.length" :id="'dl-' + v.id"><option v-for="o in v.values" :key="o" :value="o" /></datalist>
         </div>
       </div>
     </section>

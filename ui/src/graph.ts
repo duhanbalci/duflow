@@ -9,8 +9,8 @@ export interface Node {
   id: string; kind: Kind; layer: string; desc: string; doc?: string
   attrs: Record<string, string>; out: Edge[]; checks: CheckUse[]; sets: SetVar[]; file: string
 }
-export interface VarDef { id: string; ty: string; desc?: string; source?: string; values: string[] }
-export interface CheckDef { id: string; desc?: string; reads: string[]; fail_to?: string }
+export interface VarDef { id: string; ty: string; desc?: string; source?: string; values?: string[] }
+export interface CheckDef { id: string; desc?: string; reads?: string[]; fail_to?: string }
 export interface ViewDef { id: string; from: string; to: string; desc?: string }
 export interface RemovedNode { id: string; kind: Kind; layer: string; desc: string; from: [string, string][] }
 export interface DiffData {
