@@ -35,14 +35,15 @@ let cleanup: (() => void) | null = null
 function animateHeight(from: number) {
   const e = el.value; if (!e) return
   cleanup?.()
-  e.style.transition = 'none'; e.style.height = ''
+  const op0 = getComputedStyle(e).opacity
+  e.style.transition = 'none'; e.style.height = ''; e.style.opacity = ''
   void e.offsetHeight
   const to = props.collapsed ? 0 : e.offsetHeight
   if (Math.abs(to - from) < 1) { e.style.transition = ''; if (props.collapsed) { e.style.height = '0px'; e.style.overflow = 'hidden' } return }
-  e.style.overflow = 'hidden'; e.style.height = `${from}px`
+  e.style.overflow = 'hidden'; e.style.height = `${from}px`; e.style.opacity = op0
   void e.offsetHeight
-  e.style.transition = 'height .42s cubic-bezier(.2,.8,.2,1), opacity .26s, margin .42s'
-  e.style.height = `${to}px`
+  e.style.transition = 'height .42s cubic-bezier(.2,.8,.2,1), opacity .3s, margin .42s'
+  e.style.height = `${to}px`; e.style.opacity = ''
   const done = (ev: TransitionEvent) => { if (ev.propertyName === 'height') finish() }
   const finish = () => { e.removeEventListener('transitionend', done); cleanup = null; if (!props.collapsed) { e.style.height = ''; e.style.overflow = '' } e.style.transition = '' }
   cleanup = finish
@@ -100,12 +101,12 @@ const isRoot = computed(() => g.value?.roots.includes(props.id))
 </template>
 
 <style scoped>
-.card { position: relative; box-sizing: border-box; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; text-align: left; display: flex; flex-direction: column; gap: 6px; width: 100%; transition: opacity .22s, border-color .18s, box-shadow .18s; user-select: none; }
+.card { position: relative; box-sizing: border-box; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; text-align: left; display: flex; flex-direction: column; gap: 6px; width: 100%; transition: opacity .22s, border-color .18s, box-shadow .18s; user-select: none; }
 .kind { display: flex; align-items: center; gap: 6px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 .kind .root { font-size: 10px; color: var(--good); border: 1px solid var(--good); border-radius: 4px; padding: 0 4px; letter-spacing: 0; }
 .kind .chip { text-transform: none; letter-spacing: 0; margin-left: auto; }
-.id { font-size: 12px; color: var(--text); word-break: break-all; }
-.desc { color: var(--muted); font-size: 13px; }
+.id { font-size: 13px; color: var(--text); word-break: break-all; }
+.desc { color: var(--muted); font-size: 13px; transition: color .3s; }
 .lbls { display: flex; flex-wrap: wrap; gap: 4px 8px; }
 .lbl { font-size: 11px; color: var(--muted); }
 .lbl.guard { color: var(--domain); } .lbl.fail { color: var(--bad); }
@@ -117,16 +118,15 @@ const isRoot = computed(() => g.value?.roots.includes(props.id))
 .via { font-size: 11px; color: var(--api); border-top: 1px dashed var(--line); padding-top: 6px; margin-top: 2px; }
 .past { opacity: .55; cursor: pointer; }
 .past:hover { opacity: .9; }
-.now { border-color: var(--now); box-shadow: 0 0 0 4px var(--now-glow), var(--shadow); padding: 14px 16px; gap: 8px; cursor: default; }
-.now .id { font-size: 14px; }
-.now .desc { color: var(--text); font-size: 14px; }
+.now { border-color: var(--now); box-shadow: 0 0 0 4px var(--now-glow), var(--shadow); cursor: default; }
+.now .desc { color: var(--text); }
 .meta { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 2px; }
 .file { font-size: 11px; color: var(--faint); }
 .doc { font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 6px; white-space: pre-wrap; }
 .next { opacity: .6; cursor: pointer; }
 .next:hover, .next.hot { opacity: 1; border-color: var(--text); }
 .horizon { opacity: .28; pointer-events: none; }
-.collapsed { opacity: 0 !important; margin-top: -14px; padding-top: 0; padding-bottom: 0; border-top-width: 0; border-bottom-width: 0; border-color: transparent !important; pointer-events: none; }
+.card.card.collapsed { opacity: 0; margin-top: -14px; padding-top: 0; padding-bottom: 0; border-top-width: 0; border-bottom-width: 0; border-color: transparent !important; pointer-events: none; }
 .removed { border-style: dashed; }
 .removed .id { text-decoration: line-through; text-decoration-color: var(--bad); }
 .card.fade { animation: fade .28s ease-out both; }

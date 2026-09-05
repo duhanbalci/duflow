@@ -98,7 +98,8 @@ function onShiftEnd(e: TransitionEvent) {
   shift.value = 0
   nextTick(() => {
     drawWires()
-    requestAnimationFrame(() => { noTransition.value = false; animating.value = false })
+    void track.value?.offsetHeight   // sıfırlanmış transform layout'a işlensin, sonra transition'lar geri
+    noTransition.value = false; animating.value = false
   })
 }
 
@@ -107,6 +108,10 @@ watch(() => state.hist.slice(), () => { if (!animating.value) { hot.value = ''; 
 watch([() => state.hiddenLayers, () => state.role, () => state.filter, () => state.openGroups, () => ({ ...state.vars })], () => { if (!animating.value) nextTick(drawWires) })
 
 // ---- teller (bant içinde, bantla kayar) ----
+// Key'li: aynı kenar (fromId>toId) çerçeveler arasında korunur, yalnız konumu güncellenir;
+// yeni kenar solarak belirir, giden solarak gider. Böylece commit anında tel "çat" diye değişmez.
+const wireEls = new Map<string, SVGElement>()
+const SVGNS = 'http://www.w3.org/2000/svg'
 function drawWires() {
   const svg = wires.value, tr = track.value
   if (!svg || !tr) return
@@ -114,38 +119,64 @@ function drawWires() {
   const P = (el: Element) => { const r = el.getBoundingClientRect(); return { l: r.left - tb.left, r: r.right - tb.left, y: r.top - tb.top + r.height / 2 } }
   const q = (slot: string, id: string) => tr.querySelector<HTMLElement>(`.slot.${slot} .card[data-id="${CSS.escape(id)}"]`)
   const all = (slot: string) => [...tr.querySelectorAll<HTMLElement>(`.slot.${slot} .card`)]
-  const parts: string[] = []
-  const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;')
-  const link = (a: Element | null, b: HTMLElement | null, hotp: boolean) => {
-    if (!a || !b || b.classList.contains('dropped')) return
+  const seen = new Set<string>()
+  const upsert = (key: string, tag: 'path' | 'text', opacity: number, apply: (el: SVGElement, fresh: boolean) => void) => {
+    let el = wireEls.get(key)
+    const fresh = !el
+    if (!el) {
+      el = document.createElementNS(SVGNS, tag)
+      el.style.opacity = '0'; el.style.transition = 'opacity .32s'
+      svg.appendChild(el); wireEls.set(key, el)
+    }
+    apply(el, fresh)
+    const target = String(opacity)
+    if (fresh) void (el as unknown as SVGGraphicsElement).getBoundingClientRect()   // başlangıç opaklığı işlensin
+    if (el.style.opacity !== target) el.style.opacity = target
+    seen.add(key)
+  }
+  const link = (a: HTMLElement | null, b: HTMLElement | null, hotp: boolean, fade = 1) => {
+    if (!a || !b || b.classList.contains('collapsed')) return
     const A = P(a), B = P(b), mx = (A.r + B.l) / 2
     const cls = b.dataset.cls ?? ''
     const removed = b.classList.contains('removed')
     const guard = b.dataset.guard ?? ''
+    const key = `${a.dataset.id}>${b.dataset.id}`
     const stroke = hotp ? 'var(--edge-hot)' : removed ? 'var(--bad)' : guard === 'true' ? 'var(--good)' : 'var(--edge)'
-    parts.push(`<path d="M${A.r},${A.y} C${mx},${A.y} ${mx},${B.y} ${B.l},${B.y}" fill="none" stroke="${stroke}" stroke-width="${hotp || guard === 'true' ? 1.6 : 1.2}" ${cls === 'guard' || removed ? 'stroke-dasharray="5 4"' : ''} opacity="${hotp ? 1 : guard === 'false' ? .3 : .7}"/>`)
+    const op = (hotp ? 1 : guard === 'false' ? .3 : .7) * fade
+    upsert('p:' + key, 'path', op, (el) => {
+      el.setAttribute('d', `M${A.r},${A.y} C${mx},${A.y} ${mx},${B.y} ${B.l},${B.y}`)
+      el.setAttribute('fill', 'none'); el.setAttribute('stroke', stroke); el.setAttribute('stroke-width', hotp || guard === 'true' ? '1.6' : '1.2')
+      if (cls === 'guard' || removed) el.setAttribute('stroke-dasharray', '5 4'); else el.removeAttribute('stroke-dasharray')
+    })
     let labels: { label: string; cls: string }[] = []
     try { labels = JSON.parse(b.dataset.labels ?? '[]') } catch { /* boş */ }
     const y0 = B.y - (labels.length - 1) * 7
     const maxW = Math.max(0, B.l - A.r - 20)
-    labels.forEach((l, i) => parts.push(`<text x="${B.l - 8}" y="${y0 + i * 14 + 4}" text-anchor="end" class="${l.cls}" opacity="${hotp ? 1 : .85}" data-max="${maxW}"><title>${esc(l.label)}</title>${esc(l.label)}</text>`))
+    labels.forEach((l, i) => upsert(`t:${key}#${i}`, 'text', (hotp ? 1 : .85) * fade, (el) => {
+      const t = el as SVGTextElement
+      t.setAttribute('x', String(B.l - 8)); t.setAttribute('y', String(y0 + i * 14 + 4)); t.setAttribute('text-anchor', 'end'); t.setAttribute('class', l.cls)
+      if (t.dataset.full !== l.label || t.dataset.max !== String(maxW)) {
+        t.dataset.full = l.label; t.dataset.max = String(maxW)
+        t.textContent = l.label
+        let text = l.label, guardN = 0
+        while (t.getComputedTextLength() > maxW && text.length > 3 && guardN++ < 60) { text = text.slice(0, -2).trimEnd() + '…'; t.textContent = text }
+        const title = document.createElementNS(SVGNS, 'title'); title.textContent = l.label; t.appendChild(title)
+      }
+    }))
   }
   const nowEl = q('now', current.value)
   const pastEl = previous.value ? q('past', previous.value) : null
   if (leftIn.value) link(q('left', leftIn.value), pastEl, true)
   if (phase.value === 'back') { for (const c of all('now')) link(pastEl, c, c.dataset.id === current.value) }
-  else if (pastEl) link(pastEl, nowEl, true)
-  for (const c of all('next')) link(nowEl, c, c.dataset.id === hot.value || c.dataset.id === picked.value)
+  else if (pastEl) link(pastEl, nowEl, true, phase.value === 'fwd' ? 0 : 1)
+  for (const c of all('next')) link(nowEl, c, c.dataset.id === hot.value || c.dataset.id === picked.value, phase.value === 'back' ? .3 : 1)
   if (picked.value) { const p = q('next', picked.value); for (const c of all('right')) link(p, c, false) }
   else if (hot.value) { const h = q('next', hot.value); for (const c of all('right')) link(h, c, false) }
-  svg.innerHTML = parts.join('')
-  for (const t of svg.querySelectorAll<SVGTextElement>('text[data-max]')) {
-    const max = Number(t.dataset.max)
-    const node = [...t.childNodes].find((n) => n.nodeType === 3)
-    if (!node) continue
-    let text = node.textContent ?? ''
-    let guard = 0
-    while (t.getComputedTextLength() > max && text.length > 3 && guard++ < 60) { text = text.slice(0, -2).trimEnd() + '…'; node.textContent = text }
+  for (const [k, el] of wireEls) {
+    if (seen.has(k)) continue
+    wireEls.delete(k)
+    el.style.opacity = '0'
+    setTimeout(() => el.remove(), 340)
   }
 }
 
@@ -167,12 +198,12 @@ const trackStyle = computed(() => ({
 
 <template>
   <div class="stage" ref="stage">
-    <div class="track" ref="track" :style="trackStyle" @transitionend="onShiftEnd" @mouseover="onOver" @mouseleave="setHot('')" @click="onClick">
+    <div class="track" ref="track" :class="{ notrans: noTransition }" :style="trackStyle" @transitionend="onShiftEnd" @mouseover="onOver" @mouseleave="setHot('')" @click="onClick">
       <svg ref="wires" class="wires"></svg>
-      <div class="slot left" data-slot="left">
+      <div class="slot left" data-slot="left" :class="{ showing: phase === 'back' && shift !== 0 }">
         <Card v-if="leftIn" :key="leftIn" :id="leftIn" col="past" />
       </div>
-      <div class="slot past" data-slot="past">
+      <div class="slot past" data-slot="past" :class="{ fading: phase === 'fwd' }">
         <Card v-if="previous" :key="previous" :id="previous" :col="phase === 'back' ? 'now' : 'past'" />
         <div v-else class="empty">başlangıç</div>
       </div>
@@ -204,6 +235,10 @@ const trackStyle = computed(() => ({
 .wires :deep(text.guard) { fill: var(--domain); }
 .wires :deep(text.fail) { fill: var(--bad); }
 .slot { width: 300px; flex: 0 0 300px; display: flex; flex-direction: column; gap: 14px; align-items: stretch; max-height: calc(100% - 40px); overflow: auto; padding: 4px; position: relative; z-index: 1; }
-.slot.next { transition: opacity .4s; } .slot.next.dim { opacity: .28; }
+.slot.next, .slot.past, .slot.left { transition: opacity .4s; }
+.slot.next.dim { opacity: .28; }
+.slot.past.fading { opacity: 0; }
+.slot.left { opacity: 0; } .slot.left.showing { opacity: 1; }
+.track.notrans .slot { transition: none; }
 .empty { color: var(--faint); font-size: 12px; text-align: center; padding: 20px 8px; border: 1px dashed var(--line); border-radius: 10px; }
 </style>
