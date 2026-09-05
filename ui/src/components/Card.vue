@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUpdate, onMounted, onUpdated, ref } from 'vue'
 import type { Candidate } from '../graph'
 import { graph } from '../walk'
 
@@ -8,7 +8,34 @@ const props = defineProps<{
   col: 'past' | 'now' | 'next' | 'horizon'
   cand?: Candidate
   hot?: boolean
+  /** kapalı: yükseklik 0 + saydam (seçilmeyen kardeşler) */
+  collapsed?: boolean
+  /** mount'ta bu yükseklikten gerçek yüksekliğe animasyon (slot değişiminde süreklilik) */
+  fromHeight?: number
 }>()
+
+// ---- yükseklik animasyonu: içerik/stil değişince (col, cand, collapsed) eski → yeni ----
+const el = ref<HTMLElement>()
+let h0 = 0
+onBeforeUpdate(() => { h0 = el.value?.offsetHeight ?? 0 })
+onUpdated(() => animateHeight(h0))
+onMounted(() => { if (props.fromHeight) animateHeight(props.fromHeight); else if (props.collapsed && el.value) { el.value.style.height = '0px'; el.value.style.overflow = 'hidden' } })
+function animateHeight(from: number) {
+  const e = el.value; if (!e) return
+  e.style.transition = 'none'; e.style.height = ''
+  const to = props.collapsed ? 0 : e.offsetHeight
+  if (Math.abs(to - from) < 1) { if (props.collapsed) { e.style.height = '0px'; e.style.overflow = 'hidden' } return }
+  e.style.overflow = 'hidden'; e.style.height = `${from}px`
+  void e.offsetHeight
+  e.style.transition = 'height .36s cubic-bezier(.2,.8,.2,1), opacity .24s, margin .36s, border-color .3s, box-shadow .3s, padding .3s'
+  e.style.height = `${to}px`
+  const done = (ev: TransitionEvent) => {
+    if (ev.propertyName !== 'height') return
+    e.removeEventListener('transitionend', done)
+    if (!props.collapsed) { e.style.height = ''; e.style.overflow = ''; e.style.transition = '' }
+  }
+  e.addEventListener('transitionend', done)
+}
 
 const g = graph
 const node = computed(() => g.value?.card(props.id))
@@ -24,7 +51,7 @@ const isRoot = computed(() => g.value?.roots.includes(props.id))
 </script>
 
 <template>
-  <component :is="col === 'now' ? 'div' : 'button'" class="card" :class="[col, { hot, removed: diffTag === 'removed', unmet: cand?.guard === 'false', met: cand?.guard === 'true' }]"
+  <component :is="col === 'now' ? 'div' : 'button'" ref="el" class="card" :class="[col, { hot, collapsed, removed: diffTag === 'removed', unmet: cand?.guard === 'false', met: cand?.guard === 'true' }]"
     :data-id="id" :data-layer="node?.layer" :data-cls="cand?.cls ?? ''" :data-guard="cand?.guard ?? ''" :data-labels="JSON.stringify(cand?.labels.map(l => ({ label: l.label, cls: l.cls })) ?? [])"
     :tabindex="col === 'now' ? -1 : 0">
     <div class="kind">
@@ -87,6 +114,7 @@ const isRoot = computed(() => g.value?.roots.includes(props.id))
 .next { opacity: .6; cursor: pointer; }
 .next:hover, .next.hot { opacity: 1; border-color: var(--text); }
 .horizon { opacity: .28; pointer-events: none; }
+.collapsed { opacity: 0 !important; margin-top: -14px; border-color: transparent !important; pointer-events: none; }
 .removed { border-style: dashed; }
 .removed .id { text-decoration: line-through; text-decoration-color: var(--bad); }
 .card.fade { animation: fade .28s ease-out both; }

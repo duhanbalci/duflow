@@ -22,6 +22,17 @@ const leftIn = ref('')                        // geri animasyonunda sol slota ge
 const shift = ref(0)                          // -STEP ileri, +STEP geri
 const animating = ref(false)
 const noTransition = ref(false)
+const pastFrom = ref<number | undefined>()   // commit sonrası geçmiş kartın başlangıç yüksekliği
+const nowFrom = ref<number | undefined>()    // commit sonrası şimdi kartın başlangıç yüksekliği
+const nextFrom = ref<Record<string, number> | undefined>()
+const backSel = ref('')                       // geri dönüşte listeye inen eski "şimdi"
+
+/** Layout animasyonu sürerken telleri her karede yeniden çiz (transform yok → ölçüm doğru). */
+function drawLoop(ms: number, then?: () => void) {
+  const t0 = performance.now()
+  const f = () => { drawWires(); if (performance.now() - t0 < ms) requestAnimationFrame(f); else then?.() }
+  requestAnimationFrame(f)
+}
 
 const nexts = computed(() => candidates(current.value))
 const horizon = computed(() => (hot.value && !incoming.value ? candidates(hot.value) : []))
@@ -57,10 +68,8 @@ function forward(id: string) {
   picked.value = id
   incoming.value = candidates(id)
   state.openGroups = new Set(); state.filter = ''
-  nextTick(() => {
-    drawWires()
-    requestAnimationFrame(() => requestAnimationFrame(() => { shift.value = -STEP }))
-  })
+  // faz 1: kardeşler kapanır, seçilen ortaya kayıp "şimdi" boyuna gelir; teller takip eder
+  nextTick(() => drawLoop(400, () => { shift.value = -STEP }))
 }
 
 function backward() {
@@ -77,14 +86,32 @@ function backward() {
 function onShiftEnd(e: TransitionEvent) {
   if (e.target !== track.value || e.propertyName !== 'transform' || shift.value === 0) return
   const dir = shift.value
+  const tr = track.value!
+  const h = (sel: string) => tr.querySelector<HTMLElement>(sel)?.offsetHeight
+  const oldNow = current.value
+  const nowH = h('.slot.now .card'), pastH = h('.slot.past .card')
+  const pickedH = picked.value ? h(`.slot.next .card[data-id="${CSS.escape(picked.value)}"]`) : undefined
   // bant sıfırlanırken transition kapalı: görüntü değişmez, sadece state ilerler
   noTransition.value = true
-  if (dir < 0) go(picked.value); else back()
+  if (dir < 0) {
+    go(picked.value)
+    pastFrom.value = nowH; nowFrom.value = pickedH; nextFrom.value = undefined; backSel.value = ''
+  } else {
+    back()
+    nowFrom.value = pastH; pastFrom.value = undefined
+    // eski "şimdi" listede seçili (now stili) başlar, kardeşler kapalı; bir kare sonra açılır
+    nextFrom.value = { [oldNow]: nowH ?? 0 }; backSel.value = oldNow
+  }
   picked.value = ''; incoming.value = null; leftIn.value = ''
   shift.value = 0
   nextTick(() => {
     drawWires()
-    requestAnimationFrame(() => { noTransition.value = false; animating.value = false })
+    requestAnimationFrame(() => {
+      noTransition.value = false
+      if (backSel.value) backSel.value = ''
+      // faz 3: geçmiş küçülür / şimdi büyür / kardeşler açılır; teller takip eder
+      drawLoop(420, () => { pastFrom.value = undefined; nowFrom.value = undefined; nextFrom.value = undefined; animating.value = false })
+    })
   })
 }
 
@@ -158,14 +185,14 @@ const trackStyle = computed(() => ({
         <Card v-if="leftIn" :id="leftIn" col="past" />
       </div>
       <div class="slot past" data-slot="past">
-        <Card v-if="previous" :id="previous" col="past" />
+        <Card v-if="previous" :id="previous" col="past" :from-height="pastFrom" />
         <div v-else class="empty">başlangıç</div>
       </div>
       <div class="slot now" data-slot="now">
-        <Card :id="current" col="now" />
+        <Card :id="current" col="now" :from-height="nowFrom" />
       </div>
       <div class="slot next" data-slot="next">
-        <CandList :cands="nexts" :hot="hot" :selected="picked" interactive />
+        <CandList :cands="nexts" :hot="hot" :selected="picked || backSel" :from-heights="nextFrom" interactive />
       </div>
       <div class="slot right" data-slot="right">
         <template v-if="incoming">
