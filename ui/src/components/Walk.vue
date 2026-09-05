@@ -22,10 +22,9 @@ const leftIn = ref('')                        // geri animasyonunda sol slota ge
 const shift = ref(0)                          // -STEP ileri, +STEP geri
 const animating = ref(false)
 const noTransition = ref(false)
-const pastFrom = ref<number | undefined>()   // commit sonrası geçmiş kartın başlangıç yüksekliği
-const nowFrom = ref<number | undefined>()    // commit sonrası şimdi kartın başlangıç yüksekliği
-const nextFrom = ref<Record<string, number> | undefined>()
-const backSel = ref('')                       // geri dönüşte listeye inen eski "şimdi"
+const phase = ref<'' | 'fwd' | 'back'>('')
+const backCands = ref<Candidate[]>([])       // geri: "şimdi" slotunda açılan gelecek aday listesi
+const backSel = ref('')                      // geri: listede önce "şimdi" stilinde duran eski şimdi
 
 /** Layout animasyonu sürerken telleri her karede yeniden çiz (transform yok → ölçüm doğru). */
 function drawLoop(ms: number, then?: () => void) {
@@ -61,57 +60,44 @@ function onClick(e: MouseEvent) {
   else if (slot === 'past') { stopReplay(); if (id === previous.value) backward(); else rewindTo(id) }
 }
 
+// Tek faz: kardeşler kapanır + seçilen büyüyüp ortalanır + eski şimdi küçülür + bant kayar; teller her kare.
 function forward(id: string) {
   if (animating.value) return
   animating.value = true
   hot.value = ''
+  phase.value = 'fwd'
   picked.value = id
   incoming.value = candidates(id)
   state.openGroups = new Set(); state.filter = ''
-  // faz 1: kardeşler kapanır, seçilen ortaya kayıp "şimdi" boyuna gelir; teller takip eder
-  nextTick(() => drawLoop(400, () => { shift.value = -STEP }))
+  nextTick(() => { shift.value = -STEP; drawLoop(460) })
 }
 
 function backward() {
   if (animating.value || state.hist.length < 2) return
   animating.value = true
   hot.value = ''
+  phase.value = 'back'
   leftIn.value = prevPrev.value
+  backCands.value = candidates(previous.value)
+  backSel.value = current.value               // önce yalnız eski şimdi görünür (şimdi stilinde)
   nextTick(() => {
     drawWires()
-    requestAnimationFrame(() => requestAnimationFrame(() => { shift.value = STEP }))
+    requestAnimationFrame(() => { backSel.value = ''; shift.value = STEP; drawLoop(460) })
   })
 }
 
 function onShiftEnd(e: TransitionEvent) {
   if (e.target !== track.value || e.propertyName !== 'transform' || shift.value === 0) return
   const dir = shift.value
-  const tr = track.value!
-  const h = (sel: string) => tr.querySelector<HTMLElement>(sel)?.offsetHeight
-  const oldNow = current.value
-  const nowH = h('.slot.now .card'), pastH = h('.slot.past .card')
-  const pickedH = picked.value ? h(`.slot.next .card[data-id="${CSS.escape(picked.value)}"]`) : undefined
-  // bant sıfırlanırken transition kapalı: görüntü değişmez, sadece state ilerler
+  // bant sıfırlanırken transition kapalı: kaymış görüntü ile commit sonrası görüntü birebir aynı
   noTransition.value = true
-  if (dir < 0) {
-    go(picked.value)
-    pastFrom.value = nowH; nowFrom.value = pickedH; nextFrom.value = undefined; backSel.value = ''
-  } else {
-    back()
-    nowFrom.value = pastH; pastFrom.value = undefined
-    // eski "şimdi" listede seçili (now stili) başlar, kardeşler kapalı; bir kare sonra açılır
-    nextFrom.value = { [oldNow]: nowH ?? 0 }; backSel.value = oldNow
-  }
-  picked.value = ''; incoming.value = null; leftIn.value = ''
+  if (dir < 0) go(picked.value); else back()
+  picked.value = ''; incoming.value = null; leftIn.value = ''; backCands.value = []; backSel.value = ''
+  phase.value = ''
   shift.value = 0
   nextTick(() => {
     drawWires()
-    requestAnimationFrame(() => {
-      noTransition.value = false
-      if (backSel.value) backSel.value = ''
-      // faz 3: geçmiş küçülür / şimdi büyür / kardeşler açılır; teller takip eder
-      drawLoop(420, () => { pastFrom.value = undefined; nowFrom.value = undefined; nextFrom.value = undefined; animating.value = false })
-    })
+    requestAnimationFrame(() => { noTransition.value = false; animating.value = false })
   })
 }
 
@@ -146,7 +132,8 @@ function drawWires() {
   const nowEl = q('now', current.value)
   const pastEl = previous.value ? q('past', previous.value) : null
   if (leftIn.value) link(q('left', leftIn.value), pastEl, true)
-  if (pastEl) link(pastEl, nowEl, true)
+  if (phase.value === 'back') { for (const c of all('now')) link(pastEl, c, c.dataset.id === current.value) }
+  else if (pastEl) link(pastEl, nowEl, true)
   for (const c of all('next')) link(nowEl, c, c.dataset.id === hot.value || c.dataset.id === picked.value)
   if (picked.value) { const p = q('next', picked.value); for (const c of all('right')) link(p, c, false) }
   else if (hot.value) { const h = q('next', hot.value); for (const c of all('right')) link(h, c, false) }
@@ -185,14 +172,15 @@ const trackStyle = computed(() => ({
         <Card v-if="leftIn" :id="leftIn" col="past" />
       </div>
       <div class="slot past" data-slot="past">
-        <Card v-if="previous" :id="previous" col="past" :from-height="pastFrom" />
+        <Card v-if="previous" :id="previous" :col="phase === 'back' ? 'now' : 'past'" />
         <div v-else class="empty">başlangıç</div>
       </div>
       <div class="slot now" data-slot="now">
-        <Card :id="current" col="now" :from-height="nowFrom" />
+        <CandList v-if="phase === 'back'" :cands="backCands" :selected="backSel" />
+        <Card v-else :id="current" :col="phase === 'fwd' ? 'past' : 'now'" />
       </div>
-      <div class="slot next" data-slot="next">
-        <CandList :cands="nexts" :hot="hot" :selected="picked || backSel" :from-heights="nextFrom" interactive />
+      <div class="slot next" data-slot="next" :class="{ dim: phase === 'back' }">
+        <CandList :cands="nexts" :hot="hot" :selected="picked" interactive />
       </div>
       <div class="slot right" data-slot="right">
         <template v-if="incoming">
@@ -215,5 +203,6 @@ const trackStyle = computed(() => ({
 .wires :deep(text.guard) { fill: var(--domain); }
 .wires :deep(text.fail) { fill: var(--bad); }
 .slot { width: 300px; flex: 0 0 300px; display: flex; flex-direction: column; gap: 14px; align-items: stretch; max-height: calc(100% - 40px); overflow: auto; padding: 4px; position: relative; z-index: 1; }
+.slot.next { transition: opacity .4s; } .slot.next.dim { opacity: .28; }
 .empty { color: var(--faint); font-size: 12px; text-align: center; padding: 20px 8px; border: 1px dashed var(--line); border-radius: 10px; }
 </style>
