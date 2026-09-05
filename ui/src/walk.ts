@@ -3,6 +3,7 @@
 
 import { computed, reactive, ref, shallowRef } from 'vue'
 import { Graph, type Candidate, type Node } from './graph'
+import { evalGuard } from './expr'
 
 export const graph = shallowRef<Graph | null>(null)
 
@@ -25,7 +26,21 @@ export const previous = computed(() => state.hist[state.hist.length - 2] ?? '')
 
 export function candidates(id: string): Candidate[] {
   const g = graph.value; if (!g) return []
-  return g.nexts(id, { hideLayers: state.hiddenLayers, role: state.role || undefined })
+  const cs = g.nexts(id, { hideLayers: state.hiddenLayers, role: state.role || undefined })
+  // guard'ı bilinen değerlerle değerlendir: biri true → true; hepsi false → false; aksi unknown
+  for (const c of cs) {
+    const whens = c.labels.filter((l) => l.when).map((l) => evalGuard(l.when!, state.vars))
+    if (!whens.length) { c.guard = undefined; continue }
+    c.guard = whens.includes('true') ? 'true' : whens.every((w) => w === 'false') ? 'false' : 'unknown'
+  }
+  return cs
+}
+
+/** Yan panelden elle değer verme ("ya şöyle olsaydı") */
+export function setVar(id: string, value: string) {
+  state.vars[id] = value
+  state.flash = id
+  setTimeout(() => { if (state.flash === id) state.flash = '' }, 800)
 }
 
 export function resetVars() {

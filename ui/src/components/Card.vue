@@ -24,8 +24,8 @@ const isRoot = computed(() => g.value?.roots.includes(props.id))
 </script>
 
 <template>
-  <component :is="col === 'now' ? 'div' : 'button'" class="card" :class="[col, { hot, removed: diffTag === 'removed' }]"
-    :data-id="id" :data-layer="node?.layer" :data-cls="cand?.cls ?? ''" :data-labels="JSON.stringify(cand?.labels ?? [])"
+  <component :is="col === 'now' ? 'div' : 'button'" class="card" :class="[col, { hot, removed: diffTag === 'removed', unmet: cand?.guard === 'false', met: cand?.guard === 'true' }]"
+    :data-id="id" :data-layer="node?.layer" :data-cls="cand?.cls ?? ''" :data-guard="cand?.guard ?? ''" :data-labels="JSON.stringify(cand?.labels.map(l => ({ label: l.label, cls: l.cls })) ?? [])"
     :tabindex="col === 'now' ? -1 : 0">
     <div class="kind">
       <span class="dot"></span>{{ node?.kind }}
@@ -36,6 +36,8 @@ const isRoot = computed(() => g.value?.roots.includes(props.id))
     <div class="desc">{{ node?.desc }}</div>
     <div v-if="cand?.labels.length && col !== 'horizon'" class="lbls">
       <span v-for="l in cand.labels" :key="l.label" class="lbl" :class="l.cls">{{ l.label }}</span>
+      <span v-if="cand.guard === 'true'" class="g met">✓ şu an sağlanıyor</span>
+      <span v-else-if="cand.guard === 'false'" class="g unmet">✗ şu an sağlanmıyor</span>
     </div>
 
     <template v-if="col === 'now' && full">
@@ -68,6 +70,11 @@ const isRoot = computed(() => g.value?.roots.includes(props.id))
 .lbls { display: flex; flex-wrap: wrap; gap: 4px 8px; }
 .lbl { font-size: 11px; color: var(--muted); }
 .lbl.guard { color: var(--domain); } .lbl.fail { color: var(--bad); }
+.g { font-size: 11px; margin-left: auto; }
+.g.met { color: var(--good); } .g.unmet { color: var(--faint); }
+.next.met { opacity: .95; border-color: var(--good); }
+.next.unmet { opacity: .35; }
+.next.unmet:hover, .next.unmet.hot { opacity: .8; }
 .via { font-size: 11px; color: var(--api); border-top: 1px dashed var(--line); padding-top: 6px; margin-top: 2px; }
 .past { opacity: .55; cursor: pointer; }
 .past:hover { opacity: .9; }

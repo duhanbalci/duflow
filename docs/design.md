@@ -206,7 +206,10 @@ Soldan sağa dört sütun: **geçmiş (1 adım, soluk)** · **şimdi (büyük ka
 
 Ayrı mod yok. Tıklayarak yürümek simülasyondur. `sets` olan adıma girince değişken satırı
 yanıp söner, `+1`/`=0` gibi basit ifadeler uygulanır, geri kalanı "değişti" olarak işaretlenir.
-Guard'lar yorumlanmaz: tüm dallar seçilebilir, guard metni etikette.
+Guard'lar UI'da **best-effort** değerlendirilir (`ui/src/expr.ts`: değişken, sayı, string,
+karşılaştırma, `&& || !`, parantez): tüm değişkenler biliniyorsa sağlanan dal yeşil/kalın,
+sağlanmayan soluk (yine tıklanabilir, "ya şöyle olsaydı"); bilinmeyen değişken varsa nötr.
+Yan panelde değişken değeri elle değiştirilebilir. CLI/lint hâlâ yorumlamaz.
 
 ### 7.3 Replay
 

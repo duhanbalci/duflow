@@ -123,7 +123,9 @@ function drawWires() {
     const A = P(a), B = P(b), mx = (A.r + B.l) / 2
     const cls = b.dataset.cls ?? ''
     const removed = b.classList.contains('removed')
-    parts.push(`<path d="M${A.r},${A.y} C${mx},${A.y} ${mx},${B.y} ${B.l},${B.y}" fill="none" stroke="${hotp ? 'var(--edge-hot)' : removed ? 'var(--bad)' : 'var(--edge)'}" stroke-width="${hotp ? 1.6 : 1.2}" ${cls === 'guard' || removed ? 'stroke-dasharray="5 4"' : ''} opacity="${hotp ? 1 : .7}"/>`)
+    const guard = b.dataset.guard ?? ''
+    const stroke = hotp ? 'var(--edge-hot)' : removed ? 'var(--bad)' : guard === 'true' ? 'var(--good)' : 'var(--edge)'
+    parts.push(`<path d="M${A.r},${A.y} C${mx},${A.y} ${mx},${B.y} ${B.l},${B.y}" fill="none" stroke="${stroke}" stroke-width="${hotp || guard === 'true' ? 1.6 : 1.2}" ${cls === 'guard' || removed ? 'stroke-dasharray="5 4"' : ''} opacity="${hotp ? 1 : guard === 'false' ? .3 : .7}"/>`)
     let labels: { label: string; cls: string }[] = []
     try { labels = JSON.parse(b.dataset.labels ?? '[]') } catch { /* boş */ }
     const y0 = B.y - (labels.length - 1) * 7
@@ -158,7 +160,7 @@ onMounted(() => {
   cols.value?.addEventListener('scroll', drawWires, true)
 })
 onUnmounted(() => ro?.disconnect())
-watch([() => state.hiddenLayers, () => state.role, () => state.filter, () => state.openGroups], () => nextTick(drawWires))
+watch([() => state.hiddenLayers, () => state.role, () => state.filter, () => state.openGroups, () => ({ ...state.vars })], () => nextTick(drawWires))
 </script>
 
 <template>

@@ -25,7 +25,9 @@ export interface Data {
 /** Aday: bir node'dan gidilebilecek yer. Aynı hedefe giden kenarlar tek adayda birleşir. */
 export interface Candidate {
   to: string
-  labels: { label: string; cls: string }[]
+  labels: { label: string; cls: string; when?: string }[]
+  /** guard değerlendirmesi (UI'da state.vars ile doldurulur) */
+  guard?: 'true' | 'false' | 'unknown'
   cls: '' | 'fail' | 'guard'
   /** API katmanı kapalıyken atlanan call */
   via?: Node
@@ -86,7 +88,7 @@ export class Graph {
       const k = to + '|' + (via?.id ?? '')
       let c = byKey.get(k)
       if (!c) { c = { to, labels: [], cls: '', via, diff }; byKey.set(k, c); res.push(c) }
-      if (label) c.labels.push({ label, cls })
+      if (label) c.labels.push({ label, cls, when })
       if (cls === 'fail' || (cls === 'guard' && c.cls !== 'fail')) c.cls = cls as Candidate['cls']
       if (diff === 'added') c.diff = 'added'
     }
