@@ -20,20 +20,23 @@ let h0 = 0
 onBeforeUpdate(() => { h0 = el.value?.offsetHeight ?? 0 })
 onUpdated(() => animateHeight(h0))
 onMounted(() => { if (props.fromHeight) animateHeight(props.fromHeight); else if (props.collapsed && el.value) { el.value.style.height = '0px'; el.value.style.overflow = 'hidden' } })
+// Stil değişimleri (padding, font, kenarlık) anında uygulanır; yalnız yükseklik/opaklık/margin animasyonlu.
+// Hedef yükseklik, transition'lar kapalıyken ölçülür → ara değer ölçme hatası yok.
+let cleanup: (() => void) | null = null
 function animateHeight(from: number) {
   const e = el.value; if (!e) return
+  cleanup?.()
   e.style.transition = 'none'; e.style.height = ''
+  void e.offsetHeight
   const to = props.collapsed ? 0 : e.offsetHeight
-  if (Math.abs(to - from) < 1) { if (props.collapsed) { e.style.height = '0px'; e.style.overflow = 'hidden' } return }
+  if (Math.abs(to - from) < 1) { e.style.transition = ''; if (props.collapsed) { e.style.height = '0px'; e.style.overflow = 'hidden' } return }
   e.style.overflow = 'hidden'; e.style.height = `${from}px`
   void e.offsetHeight
-  e.style.transition = 'height .36s cubic-bezier(.2,.8,.2,1), opacity .24s, margin .36s, border-color .3s, box-shadow .3s, padding .3s'
+  e.style.transition = 'height .42s cubic-bezier(.2,.8,.2,1), opacity .26s, margin .42s'
   e.style.height = `${to}px`
-  const done = (ev: TransitionEvent) => {
-    if (ev.propertyName !== 'height') return
-    e.removeEventListener('transitionend', done)
-    if (!props.collapsed) { e.style.height = ''; e.style.overflow = ''; e.style.transition = '' }
-  }
+  const done = (ev: TransitionEvent) => { if (ev.propertyName === 'height') finish() }
+  const finish = () => { e.removeEventListener('transitionend', done); cleanup = null; if (!props.collapsed) { e.style.height = ''; e.style.overflow = '' } e.style.transition = '' }
+  cleanup = finish
   e.addEventListener('transitionend', done)
 }
 
@@ -51,9 +54,9 @@ const isRoot = computed(() => g.value?.roots.includes(props.id))
 </script>
 
 <template>
-  <component :is="col === 'now' ? 'div' : 'button'" ref="el" class="card" :class="[col, { hot, collapsed, removed: diffTag === 'removed', unmet: cand?.guard === 'false', met: cand?.guard === 'true' }]"
+  <div ref="el" class="card" :role="col === 'now' ? undefined : 'button'" :class="[col, { hot, collapsed, removed: diffTag === 'removed', unmet: cand?.guard === 'false', met: cand?.guard === 'true' }]"
     :data-id="id" :data-layer="node?.layer" :data-cls="cand?.cls ?? ''" :data-guard="cand?.guard ?? ''" :data-labels="JSON.stringify(cand?.labels.map(l => ({ label: l.label, cls: l.cls })) ?? [])"
-    :tabindex="col === 'now' ? -1 : 0">
+    :tabindex="col === 'now' || col === 'horizon' ? -1 : 0">
     <div class="kind">
       <span class="dot"></span>{{ node?.kind }}
       <span v-if="isRoot" class="root">root</span>
@@ -84,11 +87,11 @@ const isRoot = computed(() => g.value?.roots.includes(props.id))
       via {{ cand.via.kind === 'call' ? (cand.via.attrs.method ?? '') + ' ' + (cand.via.attrs.path ?? cand.via.id) : cand.via.id }}
       <template v-if="cand.via.checks.length"> · {{ cand.via.checks.length }} check</template>
     </div>
-  </component>
+  </div>
 </template>
 
 <style scoped>
-.card { position: relative; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; text-align: left; display: flex; flex-direction: column; gap: 6px; width: 100%; transition: opacity .22s, border-color .18s, box-shadow .18s; will-change: transform; }
+.card { position: relative; box-sizing: border-box; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; text-align: left; display: flex; flex-direction: column; gap: 6px; width: 100%; transition: opacity .22s, border-color .18s, box-shadow .18s; user-select: none; }
 .kind { display: flex; align-items: center; gap: 6px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 .kind .root { font-size: 10px; color: var(--good); border: 1px solid var(--good); border-radius: 4px; padding: 0 4px; letter-spacing: 0; }
 .kind .chip { text-transform: none; letter-spacing: 0; margin-left: auto; }
@@ -105,7 +108,7 @@ const isRoot = computed(() => g.value?.roots.includes(props.id))
 .via { font-size: 11px; color: var(--api); border-top: 1px dashed var(--line); padding-top: 6px; margin-top: 2px; }
 .past { opacity: .55; cursor: pointer; }
 .past:hover { opacity: .9; }
-.now { border-color: var(--now); box-shadow: 0 0 0 4px var(--now-glow), var(--shadow); padding: 14px 16px; gap: 8px; cursor: default; transition: opacity .22s, border-color .3s, box-shadow .3s, padding .3s; }
+.now { border-color: var(--now); box-shadow: 0 0 0 4px var(--now-glow), var(--shadow); padding: 14px 16px; gap: 8px; cursor: default; }
 .now .id { font-size: 14px; }
 .now .desc { color: var(--text); font-size: 14px; }
 .meta { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 2px; }
@@ -114,7 +117,7 @@ const isRoot = computed(() => g.value?.roots.includes(props.id))
 .next { opacity: .6; cursor: pointer; }
 .next:hover, .next.hot { opacity: 1; border-color: var(--text); }
 .horizon { opacity: .28; pointer-events: none; }
-.collapsed { opacity: 0 !important; margin-top: -14px; border-color: transparent !important; pointer-events: none; }
+.collapsed { opacity: 0 !important; margin-top: -14px; padding-top: 0; padding-bottom: 0; border-top-width: 0; border-bottom-width: 0; border-color: transparent !important; pointer-events: none; }
 .removed { border-style: dashed; }
 .removed .id { text-decoration: line-through; text-decoration-color: var(--bad); }
 .card.fade { animation: fade .28s ease-out both; }

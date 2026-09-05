@@ -82,7 +82,8 @@ function backward() {
   backSel.value = current.value               // önce yalnız eski şimdi görünür (şimdi stilinde)
   nextTick(() => {
     drawWires()
-    requestAnimationFrame(() => { backSel.value = ''; shift.value = STEP; drawLoop(460) })
+    void track.value?.offsetHeight   // kapalı başlangıç durumu layout'a işlensin (rAF'a bağımlı olma)
+    backSel.value = ''; shift.value = STEP; drawLoop(460)
   })
 }
 
