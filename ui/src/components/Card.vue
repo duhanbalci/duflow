@@ -34,6 +34,9 @@ const isRoot = computed(() => g.value?.roots.includes(props.id))
     </div>
     <div class="id mono">{{ id }}</div>
     <div class="desc">{{ node?.desc }}</div>
+    <div v-if="cand?.labels.length && col !== 'horizon'" class="lbls">
+      <span v-for="l in cand.labels" :key="l.label" class="lbl" :class="l.cls">{{ l.label }}</span>
+    </div>
 
     <template v-if="col === 'now' && full">
       <div class="meta" v-if="Object.keys(full.attrs).length || full.checks.length || full.sets.length || listens.length">
@@ -49,7 +52,7 @@ const isRoot = computed(() => g.value?.roots.includes(props.id))
     </template>
 
     <div v-if="cand?.via" class="via mono">
-      via {{ cand.via.attrs.method ?? '' }} {{ cand.via.attrs.path ?? cand.via.id }}
+      via {{ cand.via.kind === 'call' ? (cand.via.attrs.method ?? '') + ' ' + (cand.via.attrs.path ?? cand.via.id) : cand.via.id }}
       <template v-if="cand.via.checks.length"> · {{ cand.via.checks.length }} check</template>
     </div>
   </component>
@@ -62,6 +65,9 @@ const isRoot = computed(() => g.value?.roots.includes(props.id))
 .kind .chip { text-transform: none; letter-spacing: 0; margin-left: auto; }
 .id { font-size: 12px; color: var(--text); word-break: break-all; }
 .desc { color: var(--muted); font-size: 13px; }
+.lbls { display: flex; flex-wrap: wrap; gap: 4px 8px; }
+.lbl { font-size: 11px; color: var(--muted); }
+.lbl.guard { color: var(--domain); } .lbl.fail { color: var(--bad); }
 .via { font-size: 11px; color: var(--api); border-top: 1px dashed var(--line); padding-top: 6px; margin-top: 2px; }
 .past { opacity: .55; cursor: pointer; }
 .past:hover { opacity: .9; }

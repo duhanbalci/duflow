@@ -127,13 +127,27 @@ function drawWires() {
     let labels: { label: string; cls: string }[] = []
     try { labels = JSON.parse(b.dataset.labels ?? '[]') } catch { /* boş */ }
     const y0 = B.y - (labels.length - 1) * 7
-    labels.forEach((l, i) => parts.push(`<text x="${B.l - 8}" y="${y0 + i * 14 + 4}" text-anchor="end" class="${l.cls}" opacity="${hotp ? 1 : .85}">${esc(l.label)}</text>`))
+    const maxW = Math.max(0, B.l - A.r - 20)
+    labels.forEach((l, i) => parts.push(`<text x="${B.l - 8}" y="${y0 + i * 14 + 4}" text-anchor="end" class="${l.cls}" opacity="${hotp ? 1 : .85}" data-max="${maxW}"><title>${esc(l.label)}</title>${esc(l.label)}</text>`))
   }
   const nowEl = q('now', current.value)
   if (previous.value) link(q('past', previous.value), nowEl, true)
   for (const c of cl.querySelectorAll<HTMLElement>('.col.next .card')) link(nowEl, c, c.dataset.id === hot.value)
   if (hot.value) { const h = q('next', hot.value); for (const c of cl.querySelectorAll<HTMLElement>('.col.horizon .card')) link(h, c, false) }
   svg.innerHTML = parts.join('')
+  // sığmayan etiketi kısalt (ölçüm DOM'a girdikten sonra)
+  for (const t of svg.querySelectorAll<SVGTextElement>('text[data-max]')) {
+    const max = Number(t.dataset.max)
+    const title = t.querySelector('title')
+    let text = t.textContent?.replace(title?.textContent ?? '', '') ?? ''
+    const node = [...t.childNodes].find((n) => n.nodeType === 3)
+    if (!node) continue
+    let guard = 0
+    while (t.getComputedTextLength() > max && text.length > 3 && guard++ < 60) {
+      text = text.slice(0, -2).trimEnd() + '…'
+      node.textContent = text
+    }
+  }
   svg.style.opacity = '1'
 }
 
@@ -188,7 +202,7 @@ watch([() => state.hiddenLayers, () => state.role, () => state.filter, () => sta
 .wires :deep(text) { font: 11px "Instrument Sans", system-ui, sans-serif; fill: var(--muted); paint-order: stroke; stroke: var(--bg); stroke-width: 5px; stroke-linejoin: round; }
 .wires :deep(text.guard) { fill: var(--domain); }
 .wires :deep(text.fail) { fill: var(--bad); }
-.cols { display: flex; align-items: center; gap: 72px; position: relative; z-index: 1; }
+.cols { display: flex; align-items: center; gap: 96px; position: relative; z-index: 1; }
 .col { display: flex; flex-direction: column; gap: 14px; align-items: stretch; }
 .col.past { width: 200px; } .col.now { width: 340px; } .col.next { width: 260px; } .col.horizon { width: 210px; }
 .col.next { max-height: calc(100vh - 120px); overflow: auto; padding: 4px; }

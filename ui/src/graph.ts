@@ -90,14 +90,18 @@ export class Graph {
       if (cls === 'fail' || (cls === 'guard' && c.cls !== 'fail')) c.cls = cls as Candidate['cls']
       if (diff === 'added') c.diff = 'added'
     }
-    const n = this.nodes.get(id)
-    if (n) for (const e of n.out) {
-      const t = this.nodes.get(e.to)
-      const addedEdge = this.diff?.edges_added.some(([f, to]) => f === id && to === e.to) ? 'added' : undefined
-      if (t && opts.hideLayers?.has(t.layer) && t.kind === 'call') {
-        for (const e2 of t.out) push(e2.to, e2.label, e2.class, e2.when, t)
-      } else push(e.to, e.label, e.class, e.when, undefined, addedEdge)
+    // gizli katmandaki hedef atlanır, onun çıkışları "via" ile gelir (zincirleme, döngü korumalı)
+    const walk = (from: string, via: Node | undefined, seen: Set<string>) => {
+      const n = this.nodes.get(from); if (!n) return
+      for (const e of n.out) {
+        const t = this.nodes.get(e.to)
+        const addedEdge = !via && this.diff?.edges_added.some(([f, to]) => f === from && to === e.to) ? 'added' : undefined
+        if (t && opts.hideLayers?.has(t.layer) && t.id !== id && !seen.has(t.id)) {
+          if (t.out.length) { seen.add(t.id); walk(t.id, via ?? t, seen) } else push(e.to, e.label, e.class, e.when, via, addedEdge)
+        } else push(e.to, e.label, e.class, e.when, via, addedEdge)
+      }
     }
+    walk(id, undefined, new Set())
     // diff: artık olmayan kenarlar ve silinmiş hedefler
     if (this.diff) {
       for (const [from, to, label] of this.diff.edges_removed) if (from === id) push(to, label, 'fail', undefined, undefined, 'removed')
