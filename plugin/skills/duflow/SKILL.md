@@ -37,7 +37,7 @@ states, triggers, endpoints, checks, possible outcomes, variables. It changes in
    duflow edit <check|var|perm> --set reads=role  # definitions are editable too
    duflow rename <old> <new>                      # references + file move
    duflow rm <id> [--force]                       # node or definition; --force ALSO DELETES every reference (edges, check/perm default targets, reads)
-   echo '[{"op":"add_child","id":"a","line":"-> \"b\""}]' | duflow apply - [--dry-run]   # batch; atomic, lists every failing op
+   echo '[{"op":"add_child","id":"a","line":"-> \"b\""}]' | duflow apply - [--dry-run]   # batch; atomic, lists every failing op; `duflow apply --help` = op schema
    ```
    Writes take a per-directory lock; parallel agents queue instead of clobbering each other.
 4. **Validate when done:** `duflow validate` must report zero errors (`--prefix <ns>` for your own namespace, `--summary [--depth 2]` for a code × namespace table). A new node with no incoming edge yields `unreachable`; connect it.
@@ -47,7 +47,7 @@ states, triggers, endpoints, checks, possible outcomes, variables. It changes in
 
 Shell autocomplete (node IDs, vars, layers, git revs): `duflow completions fish|zsh|bash` prints the one-liner to add.
 
-Install: `curl -fsSL https://raw.githubusercontent.com/duhanbalci/duflow/main/install.sh | sh`. Update: `duflow self-update`.
+Install: `curl -fsSL https://raw.githubusercontent.com/duhanbalci/duflow/main/install.sh | sh`. Update: `duflow self-update` (`validate` prints a note once a day when a newer release exists; an old binary runs old lint rules).
 Claude Code: `claude plugin marketplace add duhanbalci/duflow && claude plugin install duflow@duflow` (this skill + hooks).
 Other agents (Codex, Cursor, ...): `duflow skill install [--project]` writes this file from the binary.
 

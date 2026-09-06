@@ -134,7 +134,8 @@ enum Cmd {
         force: bool,
     },
     /// Apply a JSON op list from stdin (`-`) or a file. Atomic: any failing op → nothing is written,
-    /// all failures listed (--continue-on-error writes the successful ones)
+    /// all failures listed (--continue-on-error writes the successful ones). `--help` shows the op schema
+    #[command(after_long_help = APPLY_HELP)]
     Apply {
         #[arg(default_value = "-")]
         file: String,
@@ -188,6 +189,25 @@ enum Cmd {
         check: bool,
     },
 }
+
+/// `duflow apply --help` kuyruğu: op şeması + örnek. `edit::Op` ile birlikte güncellenir.
+const APPLY_HELP: &str = r#"OPS (JSON array; "op" selects the shape, IDs are strings):
+  {"op":"add_node","kind":"state|action|call|event","id":"a.b","attrs":{"layer":"domain","desc":"..."},"children":["-> "x" case="ok"","returns 200 -> "y""]}
+  {"op":"set_attr","id":"a.b","key":"desc","value":"..."}          empty value removes the attribute
+  {"op":"set_kind","id":"a.b","kind":"call"}
+  {"op":"add_child","id":"a.b","line":"check "has_ip" fail=409 outcome="toast: no ip""}
+  {"op":"rm_edge","id":"a.b","to":"a.c"}                           every child line targeting a.c (->, on, returns, calls, check ->)
+  {"op":"rm_child","id":"a.b","name":"sets","arg":"retry"}          child by name + first argument
+  {"op":"rename","from":"a.b","to":"a.c"}
+  {"op":"rm_node","id":"a.b","force":true}                          node or definition; force also deletes references
+  {"op":"add_var","id":"deploy.attempts","attrs":{"type":"int"}}
+  {"op":"add_check","id":"has_ip","attrs":{"desc":"...","outcome":"toast: no ip"}}
+  {"op":"add_perm","id":"deploy.trigger","attrs":{"scope":"project","deny":"404"}}
+  {"op":"add_root","id":"network.liveness","attrs":{"every":"30s"}}
+
+EXAMPLE
+  printf '%s' '[{"op":"add_child","id":"a.b","line":"-> "a.c" seq=1"},{"op":"rm_edge","id":"a.b","to":"a.d"}]' | duflow apply - --dry-run
+"#;
 
 /// Release'lerin yayınlandığı GitHub deposu; asset adı `duflow-v<ver>-<target>.tar.gz`.
 const REPO_OWNER: &str = "duhanbalci";
@@ -313,6 +333,7 @@ fn run() -> Result<()> {
             no_src,
         } => {
             let g = Graph::load(&dir)?;
+            update_hint();
             let mut d = lint(&g);
             if !no_src {
                 d.extend(duflow_core::lint::src_lint(&g, &repo_root(&dir)));
@@ -1024,6 +1045,64 @@ fn complete_rev(current: &OsStr) -> Vec<CompletionCandidate> {
     v
 }
 
+/// `validate` başında günde bir kez GitHub'a bakar; yeni sürüm varsa stderr'e tek satır.
+/// Sonuç `$TMPDIR/duflow-update-check` dosyasında (zaman + son sürüm) saklanır; ağ hatası sessiz.
+/// `DUFLOW_NO_UPDATE_CHECK=1` kapatır. Eski binary sessizce eski lint koşmasın diye.
+fn update_hint() {
+    if std::env::var_os("DUFLOW_NO_UPDATE_CHECK").is_some() {
+        return;
+    }
+    let current = env!("CARGO_PKG_VERSION");
+    let cache = std::env::temp_dir().join("duflow-update-check");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let cached = std::fs::read_to_string(&cache).ok().and_then(|s| {
+        let (t, v) = s.trim().split_once(' ')?;
+        Some((t.parse::<u64>().ok()?, v.to_string()))
+    });
+    let latest = match cached {
+        Some((t, v)) if now.saturating_sub(t) < 24 * 3600 => v,
+        _ => {
+            let fetched = std::thread::spawn(fetch_latest_version)
+                .join()
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| current.to_string());
+            let _ = std::fs::write(&cache, format!("{now} {fetched}"));
+            fetched
+        }
+    };
+    if version_newer(&latest, current) {
+        eprintln!("note: duflow {latest} is available (you run {current}; lint rules may be outdated) — run `duflow self-update`");
+    }
+}
+
+fn fetch_latest_version() -> Option<String> {
+    use self_update::backends::github::Update;
+    let u = Update::configure()
+        .repo_owner(REPO_OWNER)
+        .repo_name(REPO_NAME)
+        .bin_name("duflow")
+        .current_version(env!("CARGO_PKG_VERSION"))
+        .build()
+        .ok()?;
+    let r = u.get_latest_release().ok()?;
+    Some(r.latest()?.version().trim_start_matches('v').to_string())
+}
+
+/// `a` sürümü `b`'den yeni mi (sayısal parça karşılaştırması).
+fn version_newer(a: &str, b: &str) -> bool {
+    let parse = |s: &str| -> Vec<u64> {
+        s.trim_start_matches('v')
+            .split('.')
+            .map(|p| p.parse().unwrap_or(0))
+            .collect()
+    };
+    parse(a) > parse(b)
+}
+
 /// GitHub Releases'tan güncelle. `check`: sadece sürüm karşılaştır.
 fn self_update(check: bool) -> Result<()> {
     use self_update::backends::github::Update;
@@ -1095,6 +1174,13 @@ fn skill_install(project: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn version_compare_is_numeric() {
+        assert!(version_newer("0.5.10", "0.5.2"));
+        assert!(!version_newer("0.5.2", "0.5.2"));
+        assert!(!version_newer("v0.4.9", "0.5.0"));
+    }
 
     #[test]
     fn edit_removals_come_before_additions() {
