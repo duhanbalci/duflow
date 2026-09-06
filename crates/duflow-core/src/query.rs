@@ -17,6 +17,11 @@ pub struct Brief {
     pub writes: Vec<SetVar>,
     pub checks: Vec<CheckDef>,
     pub group_siblings: Vec<String>,
+    /// En yakın root ve adım sayısı
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub distance: Option<usize>,
 }
 
 pub fn brief(g: &Graph, id: &str) -> Option<Brief> {
@@ -42,8 +47,12 @@ pub fn brief(g: &Graph, id: &str) -> Option<Brief> {
         .filter(|k| *k != id && group_of(k) == grp)
         .cloned()
         .collect();
+    let paths_from_root = g.paths_from_roots(id, 3);
+    let shortest = paths_from_root.first();
     Some(Brief {
-        paths_from_root: g.paths_from_roots(id, 3),
+        root: shortest.and_then(|p| p.first().cloned()),
+        distance: shortest.map(|p| p.len() - 1),
+        paths_from_root,
         incoming: g.incoming_edges(id).into_iter().cloned().collect(),
         outgoing: g.outgoing(id).to_vec(),
         reads: reads.into_iter().collect(),
@@ -66,6 +75,9 @@ impl Brief {
         s.push_str(&format!("{}:{}\n", n.file, n.line));
         for (k, v) in &n.attrs {
             s.push_str(&format!("- {k}: {v}\n"));
+        }
+        if let (Some(r), Some(d)) = (&self.root, self.distance) {
+            s.push_str(&format!("Root: {r} ({d} steps)\n"));
         }
         if self.paths_from_root.is_empty() {
             s.push_str(
@@ -107,6 +119,9 @@ impl Brief {
                 .unwrap_or_default();
             s.push_str(&format!("- {}→ {} — {d}\n", tag_post(&e.label), e.to));
         }
+        for o in &n.outcomes {
+            s.push_str(&format!("- [{}] ⇥ {}\n", o.label(), o.text));
+        }
         if !self.checks.is_empty() || !n.checks.is_empty() {
             s.push_str("\n## Checks\n");
             for c in &n.checks {
@@ -117,17 +132,25 @@ impl Brief {
                     (Some(f), None) => format!(" ✗ {f}"),
                     _ => String::new(),
                 };
-                s.push_str(&format!("- {}{fail} — {desc}\n", c.name));
+                let name = match c.name.strip_prefix("perm:") {
+                    Some(p) => format!("requires {p}"),
+                    None => c.name.clone(),
+                };
+                let end = match &c.outcome {
+                    Some(o) => format!(" ⇥ {o}"),
+                    None => String::new(),
+                };
+                s.push_str(&format!("- {name}{fail}{end} — {desc}\n"));
             }
         }
         if !self.reads.is_empty() || !self.writes.is_empty() {
             s.push_str("\n## Variables\n");
             for r in &self.reads {
-                let src = g
-                    .vars
-                    .get(r)
-                    .map(|v| v.source.clone().unwrap_or_else(|| "sets".into()))
-                    .unwrap_or_else(|| "?".into());
+                let src = match g.vars.get(r) {
+                    Some(v) => v.source.clone().unwrap_or_else(|| "sets".into()),
+                    None if g.is_local_var(r) => "local".into(),
+                    None => "?".into(),
+                };
                 s.push_str(&format!("- reads {r} ({src})\n"));
             }
             for w in &self.writes {
@@ -370,4 +393,31 @@ pub fn search(g: &Graph, q: &str, limit: usize) -> Vec<Hit> {
     hits.sort_by(|a, b| b.score.cmp(&a.score).then(a.id.cmp(&b.id)));
     hits.truncate(limit);
     hits
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mk() -> Graph {
+        Graph::from_sources(&[
+            ("a.kdl".into(), "root \"a.start\"\nstate \"a.start\" desc=\"s\" { -> \"a.mid\" }\nstate \"a.mid\" desc=\"m\" {\n  sets \"retry\" \"+1\"\n  -> \"a.end\" when=\"retry > 2\"\n  -> \"a.start\" case=\"again\"\n}\ncall \"a.end\" desc=\"e\" {\n  requires \"x\"\n  returns 500 outcome=\"toast: boom\"\n  returns 200 -> \"a.start\"\n}\nperm \"x\" deny=403 -> \"a.start\"\n".into()),
+        ])
+        .unwrap()
+    }
+
+    #[test]
+    fn brief_reports_root_distance_local_vars_perms_and_outcomes() {
+        let g = mk();
+        let b = brief(&g, "a.end").unwrap();
+        assert_eq!(b.root.as_deref(), Some("a.start"));
+        assert_eq!(b.distance, Some(2));
+        let md = b.to_markdown(&g);
+        assert!(md.contains("Root: a.start (2 steps)"), "{md}");
+        assert!(md.contains("requires x"), "{md}");
+        assert!(md.contains("500") && md.contains("toast: boom"), "{md}");
+        let m = brief(&g, "a.mid").unwrap().to_markdown(&g);
+        assert!(m.contains("reads retry (local)"), "{m}");
+        assert!(m.contains("case again"), "{m}");
+    }
 }

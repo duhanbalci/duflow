@@ -1,16 +1,20 @@
-// Graf verisi ve saf sorgular. duflow-core export şeması (schema 1).
+// Graf verisi ve saf sorgular. duflow-core export şeması (schema 2).
 
 export type Kind = 'state' | 'action' | 'call' | 'event'
 
 export interface Edge { to: string; label: string; class: '' | 'fail' | 'guard'; when?: string }
-export interface CheckUse { name: string; fail?: number; code?: string; to?: string; line: number }
+export interface InEdge { from: string; label: string; class: '' | 'fail' | 'guard' }
+export interface CheckUse { name: string; fail?: number; code?: string; to?: string; outcome?: string; line: number }
 export interface SetVar { var: string; value: string; line: number }
+/** Node'suz son: `check ... outcome="..."` ya da `returns 409 outcome="..."`. Aday değil, yaprak. */
+export interface Outcome { label: string; text: string; class: '' | 'fail' }
 export interface Node {
   id: string; kind: Kind; layer: string; desc: string; doc?: string
-  attrs: Record<string, string>; out: Edge[]; checks: CheckUse[]; sets: SetVar[]; file: string
+  attrs: Record<string, string>; out: Edge[]; in: InEdge[]; checks: CheckUse[]; sets: SetVar[]; outcomes: Outcome[]; file: string
 }
 export interface VarDef { id: string; ty: string; desc?: string; source?: string; values?: string[] }
 export interface CheckDef { id: string; desc?: string; reads?: string[]; fail_to?: string }
+export interface PermDef { id: string; desc?: string; scope?: string; deny?: number; fail_to?: string }
 export interface ViewDef { id: string; from: string; to: string; desc?: string }
 export interface RemovedNode { id: string; kind: Kind; layer: string; desc: string; from: [string, string][] }
 export interface DiffData {
@@ -19,7 +23,10 @@ export interface DiffData {
 }
 export interface Data {
   schema: number; project: { name: string; layers: string[] }
-  nodes: Node[]; vars: VarDef[]; checks: CheckDef[]; roots: string[]; views: ViewDef[]; diff?: DiffData
+  nodes: Node[]; vars: VarDef[]; checks: CheckDef[]; roots: string[]
+  /** periyodik root'lar: id → "30s" */
+  every: Record<string, string>
+  perms: PermDef[]; views: ViewDef[]; diff?: DiffData
 }
 
 /** Aday: bir node'dan gidilebilecek yer. Aynı hedefe giden kenarlar tek adayda birleşir. */
@@ -41,6 +48,8 @@ export class Graph {
   vars = new Map<string, VarDef>()
   checks = new Map<string, CheckDef>()
   roots: string[]
+  every: Record<string, string>
+  perms = new Map<string, PermDef>()
   layers: string[]
   diff?: DiffData
   removedNodes = new Map<string, RemovedNode>()
@@ -59,6 +68,8 @@ export class Graph {
     for (const v of data.vars) this.vars.set(v.id, v)
     for (const c of data.checks) this.checks.set(c.id, c)
     this.roots = data.roots
+    this.every = data.every ?? {}
+    for (const p of data.perms ?? []) this.perms.set(p.id, p)
     this.layers = data.project.layers
     this.diff = data.diff
     if (data.diff) {

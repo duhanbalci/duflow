@@ -24,6 +24,7 @@ pub struct Graph {
     pub nodes: BTreeMap<String, Node>,
     pub vars: BTreeMap<String, VarDef>,
     pub checks: BTreeMap<String, CheckDef>,
+    pub perms: BTreeMap<String, PermDef>,
     pub roots: Vec<RootDef>,
     pub views: Vec<ViewDef>,
     /// Aynı ID'nin ikinci tanımları (lint için).
@@ -108,6 +109,13 @@ impl Graph {
             }
             self.checks.insert(c.id.clone(), c);
         }
+        for p in items.perms {
+            if self.perms.contains_key(&p.id) {
+                self.duplicates.push((p.id.clone(), p.file.clone(), p.line));
+                continue;
+            }
+            self.perms.insert(p.id.clone(), p);
+        }
         self.roots.extend(items.roots);
         self.views.extend(items.views);
     }
@@ -115,6 +123,28 @@ impl Graph {
     pub fn reindex(&mut self) {
         self.incoming.clear();
         self.out.clear();
+        // perm → sentetik check tanımı; `requires` kullanımlarının fail kodu perm'in `deny`'ından
+        for p in self.perms.values() {
+            let cid = perm_check_id(&p.id);
+            self.checks.entry(cid).or_insert_with(|| CheckDef {
+                id: perm_check_id(&p.id),
+                desc: p.desc.clone(),
+                reads: vec![],
+                fail_to: p.fail_to.clone(),
+                file: p.file.clone(),
+                line: p.line,
+            });
+        }
+        for n in self.nodes.values_mut() {
+            for c in n.checks.iter_mut() {
+                if c.fail.is_none()
+                    && let Some(pid) = c.name.strip_prefix("perm:")
+                    && let Some(p) = self.perms.get(pid)
+                {
+                    c.fail = p.deny;
+                }
+            }
+        }
         let ids: Vec<String> = self.nodes.keys().cloned().collect();
         for id in ids {
             let edges = self.resolved_edges(&id);
@@ -203,7 +233,8 @@ impl Graph {
         seen
     }
 
-    /// `on "ev" -> …` ile dinlenen event ID'leri. Dinleyen erişilebilirse event de erişilebilir sayılır.
+    /// `on "ev" -> …` ile dinlenen **event** ID'leri. Dinleyen erişilebilirse event de erişilebilir
+    /// sayılır. `on` bir state'i de dinleyebilir ama state'e erişim dinlemeyle değil kenarla olur.
     pub fn listened_events(&self, id: &str) -> Vec<String> {
         self.nodes
             .get(id)
@@ -211,7 +242,11 @@ impl Graph {
                 n.edges
                     .iter()
                     .filter_map(|e| match &e.kind {
-                        EdgeKind::On { event } => Some(event.clone()),
+                        EdgeKind::On { event }
+                            if self.nodes.get(event).is_some_and(|t| t.kind == Kind::Event) =>
+                        {
+                            Some(event.clone())
+                        }
                         _ => None,
                     })
                     .collect()
@@ -356,6 +391,24 @@ impl Graph {
             }
         }
         r
+    }
+
+    /// Bir izni `requires` ile isteyen node'lar.
+    pub fn perm_users(&self, perm: &str) -> Vec<&Node> {
+        self.check_users(&perm_check_id(perm))
+    }
+
+    /// Guard'daki isim yerel sayaç mı: tanımlı `var` değil ve noktasız.
+    pub fn is_local_var(&self, name: &str) -> bool {
+        !self.vars.contains_key(name) && !name.contains('.')
+    }
+
+    /// Yerel sayacı aynı grupta (`group_of`) yazan node var mı.
+    pub fn local_var_writers(&self, group: &str, name: &str) -> Vec<&Node> {
+        self.nodes
+            .values()
+            .filter(|n| group_of(&n.id) == group && n.sets.iter().any(|s| s.var == name))
+            .collect()
     }
 
     /// Bir check'i kullanan call'lar.

@@ -61,6 +61,9 @@ const diffTag = computed(() => {
 })
 const listens = computed(() => (full.value?.out ?? []).filter((e) => e.label.startsWith('on ')).map((e) => e.label.slice(3)))
 const isRoot = computed(() => g.value?.roots.includes(props.id))
+const every = computed(() => g.value?.every[props.id])
+/** `requires x` → perm:x check'i; chip'te "requires x" yazar */
+const checkLabel = (name: string) => name.startsWith('perm:') ? 'requires ' + name.slice(5) : 'check ' + name
 </script>
 
 <template>
@@ -69,7 +72,7 @@ const isRoot = computed(() => g.value?.roots.includes(props.id))
     :tabindex="col === 'now' || col === 'horizon' ? -1 : 0">
     <div class="kind">
       <span class="dot"></span>{{ node?.kind }}
-      <span v-if="isRoot" class="root">root</span>
+      <span v-if="isRoot" class="root">root<template v-if="every"> · every {{ every }}</template></span>
       <span v-if="diffTag" class="chip" :class="diffTag">{{ diffTag === 'added' ? 'new' : diffTag === 'removed' ? 'removed' : 'changed' }}</span>
     </div>
     <div class="id mono">{{ id }}</div>
@@ -84,10 +87,15 @@ const isRoot = computed(() => g.value?.roots.includes(props.id))
       <div class="meta" v-if="Object.keys(full.attrs).length || full.checks.length || full.sets.length || listens.length">
         <span v-for="(v, k) in full.attrs" :key="k" class="chip attr mono">{{ k }} {{ v }}</span>
         <span v-for="c in full.checks" :key="c.name" class="chip check" :title="g?.checks.get(c.name)?.desc">
-          check {{ c.name }}<template v-if="c.fail"> ✗ {{ c.fail }}</template>
+          {{ checkLabel(c.name) }}<template v-if="c.fail"> ✗ {{ c.fail }}</template>
         </span>
         <span v-for="s in full.sets" :key="s.var" class="chip set">sets {{ s.var }} {{ s.value }}</span>
         <span v-for="ev in listens" :key="ev" class="chip attr">listens {{ ev }}</span>
+      </div>
+      <div v-if="full.outcomes?.length" class="outcomes">
+        <span v-for="o in full.outcomes" :key="o.label + o.text" class="outcome" :class="o.class">
+          <span class="mono">{{ o.label }}</span> ⇥ {{ o.text }}
+        </span>
       </div>
       <div class="file mono">{{ full.file }}</div>
       <div v-if="full.doc" class="doc">{{ full.doc }}</div>
@@ -104,6 +112,9 @@ const isRoot = computed(() => g.value?.roots.includes(props.id))
 .card { position: relative; box-sizing: border-box; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; text-align: left; display: flex; flex-direction: column; gap: 6px; width: 100%; transition: opacity .3s, border-color .35s, box-shadow .35s, background-color .35s; user-select: none; }
 .card .id, .card .desc, .card .kind, .card .file, .card .lbl, .card .chip, .card .via { transition: color .35s, background-color .35s, opacity .3s; }
 .kind { display: flex; align-items: center; gap: 6px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.outcomes { display: flex; flex-direction: column; gap: 3px; margin-top: 6px; }
+.outcome { font-size: 11px; color: var(--muted); border-left: 2px solid var(--line); padding-left: 6px; }
+.outcome.fail { border-left-color: var(--bad); }
 .kind .root { font-size: 10px; color: var(--good); border: 1px solid var(--good); border-radius: 4px; padding: 0 4px; letter-spacing: 0; }
 .kind .chip { text-transform: none; letter-spacing: 0; margin-left: auto; }
 .id { font-size: 13px; color: var(--text); word-break: break-all; }

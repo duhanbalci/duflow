@@ -39,7 +39,17 @@ struct Cli {
 #[derive(Subcommand)]
 enum Cmd {
     /// Lint: dangling refs, unreachable nodes, undefined vars... (exit 1 on errors)
-    Validate,
+    Validate {
+        /// Only diagnostics whose node ID (or file) starts with this; repeatable
+        #[arg(long, add = ArgValueCompleter::new(complete_node))]
+        prefix: Vec<String>,
+        /// Table of code × namespace instead of the flat list
+        #[arg(long)]
+        summary: bool,
+        /// Skip the `src=` attribute check against the repository
+        #[arg(long)]
+        no_src: bool,
+    },
     /// One-shot summary of a node, for AI
     Brief {
         #[arg(add = ArgValueCompleter::new(complete_node))]
@@ -85,18 +95,20 @@ enum Cmd {
         #[arg(long, default_value_t = 15)]
         limit: usize,
     },
-    /// List nodes (filters: --kind, --layer, --prefix)
+    /// List nodes (filters: --kind, --layer, --prefix; --prefix repeatable)
     Ls {
         #[arg(long, value_parser = ["state", "action", "call", "event"])]
         kind: Option<String>,
         #[arg(long, add = ArgValueCompleter::new(complete_layer))]
         layer: Option<String>,
         #[arg(long, add = ArgValueCompleter::new(complete_node))]
-        prefix: Option<String>,
+        prefix: Vec<String>,
     },
-    /// New node: duflow add state deploy.done --layer domain --desc "..." --child '-> "x"'
+    /// Permissions: list all, or who requires one (`duflow perm deploy.trigger`)
+    Perm { id: Option<String> },
+    /// New node or definition: duflow add state deploy.done --layer domain --desc "..." --child '-> "x"'
     Add(AddArgs),
-    /// Edit a node: --set key=value, --child '<kdl line>', --rm-edge <target>, --rm-child name:arg
+    /// Edit a node or definition: --set key=value, --kind call, --child '<kdl line>', --rm-edge <target>, --rm-child name:arg
     Edit(EditArgs),
     /// Rename an ID (all references + file move)
     Rename {
@@ -104,20 +116,24 @@ enum Cmd {
         from: String,
         to: String,
     },
-    /// Remove a node (--force required if referenced)
+    /// Remove a node or definition (var/check/root/perm). --force also deletes every reference to it
     Rm {
         #[arg(add = ArgValueCompleter::new(complete_node))]
         id: String,
         #[arg(long)]
         force: bool,
     },
-    /// Apply a JSON op list from stdin (`-`) or a file
+    /// Apply a JSON op list from stdin (`-`) or a file. Atomic: any failing op → nothing is written,
+    /// all failures listed (--continue-on-error writes the successful ones)
     Apply {
         #[arg(default_value = "-")]
         file: String,
-        /// Preview without writing
+        /// Preview without writing; lists every failing op
         #[arg(long)]
         dry_run: bool,
+        /// Write the ops that succeeded even if some failed
+        #[arg(long)]
+        continue_on_error: bool,
     },
     /// Graph diff between two git revs (working tree if rev2 omitted)
     Diff {
@@ -197,8 +213,8 @@ enum UiCmd {
 
 #[derive(Args)]
 struct AddArgs {
-    /// state | action | call | event | var | check | root
-    #[arg(value_parser = ["state", "action", "call", "event", "var", "check", "root"])]
+    /// state | action | call | event | var | check | root | perm
+    #[arg(value_parser = ["state", "action", "call", "event", "var", "check", "root", "perm"])]
     kind: String,
     id: String,
     #[arg(long, add = ArgValueCompleter::new(complete_layer))]
@@ -219,6 +235,9 @@ struct EditArgs {
     id: String,
     #[arg(long = "set", allow_hyphen_values = true)]
     sets: Vec<String>,
+    /// Change the node kind (state|action|call|event); children are kept
+    #[arg(long, value_parser = ["state", "action", "call", "event"])]
+    kind: Option<String>,
     #[arg(long = "child", allow_hyphen_values = true)]
     children: Vec<String>,
     #[arg(long = "rm-edge", add = ArgValueCompleter::new(complete_node))]
@@ -273,17 +292,35 @@ fn run() -> Result<()> {
     };
     match cli.cmd {
         Cmd::SelfUpdate { .. } | Cmd::Skill(_) | Cmd::Hook { .. } => unreachable!(),
-        Cmd::Validate => {
+        Cmd::Validate {
+            prefix,
+            summary,
+            no_src,
+        } => {
             let g = Graph::load(&dir)?;
-            let d = lint(&g);
+            let mut d = lint(&g);
+            if !no_src {
+                d.extend(duflow_core::lint::src_lint(&g, &repo_root(&dir)));
+            }
+            if !prefix.is_empty() {
+                d.retain(|x| {
+                    prefix.iter().any(|p| {
+                        x.id.as_deref().is_some_and(|i| i.starts_with(p.as_str()))
+                            || x.file.starts_with(p.as_str())
+                    })
+                });
+            }
+            let e = d.iter().filter(|x| x.level == Level::Error).count();
+            let w = d.len() - e;
             if json {
                 println!("{}", serde_json::to_string_pretty(&d)?);
+            } else if summary {
+                print!("{}", lint_summary(&d));
+                println!("{e} errors, {w} warnings");
             } else {
                 for x in &d {
                     println!("{x}");
                 }
-                let e = d.iter().filter(|x| x.level == Level::Error).count();
-                let w = d.len() - e;
                 println!(
                     "{} nodes, {} vars, {} checks · {e} errors, {w} warnings",
                     g.nodes.len(),
@@ -291,8 +328,64 @@ fn run() -> Result<()> {
                     g.checks.len()
                 );
             }
-            if d.iter().any(|x| x.level == Level::Error) {
+            if e > 0 {
                 std::process::exit(1);
+            }
+        }
+        Cmd::Perm { id } => {
+            let g = Graph::load(&dir)?;
+            match id {
+                Some(id) => {
+                    let p = g
+                        .perms
+                        .get(&id)
+                        .with_context(|| format!("perm `{id}` not found"))?;
+                    let users: Vec<&duflow_core::model::Node> = g.perm_users(&id);
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::json!({"perm": p, "required_by": users.iter().map(|n| &n.id).collect::<Vec<_>>()})
+                        );
+                    } else {
+                        println!(
+                            "# perm {} · scope {} · deny {}",
+                            p.id,
+                            p.scope.as_deref().unwrap_or("-"),
+                            p.deny.map(|d| d.to_string()).unwrap_or_else(|| "-".into())
+                        );
+                        if let Some(d) = &p.desc {
+                            println!("{d}");
+                        }
+                        if let Some(t) = &p.fail_to {
+                            println!("fail → {t}");
+                        }
+                        println!("\n## Required by");
+                        for n in users {
+                            println!(
+                                "- {} {} {}",
+                                n.id,
+                                n.attrs.get("method").cloned().unwrap_or_default(),
+                                n.attrs.get("path").cloned().unwrap_or_default()
+                            );
+                        }
+                    }
+                }
+                None => {
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&g.perms)?);
+                    } else {
+                        for p in g.perms.values() {
+                            println!(
+                                "{:<24} {:<8} {:<4} {:>2} uses  {}",
+                                p.id,
+                                p.scope.as_deref().unwrap_or("-"),
+                                p.deny.map(|d| d.to_string()).unwrap_or_else(|| "-".into()),
+                                g.perm_users(&p.id).len(),
+                                p.desc.clone().unwrap_or_default()
+                            );
+                        }
+                    }
+                }
             }
         }
         Cmd::Brief { id, depth } => {
@@ -428,7 +521,9 @@ fn run() -> Result<()> {
                 .values()
                 .filter(|n| kind.as_deref().is_none_or(|k| n.kind.as_str() == k))
                 .filter(|n| layer.as_deref().is_none_or(|l| n.layer == l))
-                .filter(|n| prefix.as_deref().is_none_or(|p| n.id.starts_with(p)))
+                .filter(|n| {
+                    prefix.is_empty() || prefix.iter().any(|p| n.id.starts_with(p.as_str()))
+                })
                 .collect();
             if json {
                 println!("{}", serde_json::to_string_pretty(&list)?);
@@ -461,7 +556,8 @@ fn run() -> Result<()> {
             let op = match a.kind.as_str() {
                 "var" => Op::AddVar { id: a.id, attrs },
                 "check" => Op::AddCheck { id: a.id, attrs },
-                "root" => Op::AddRoot { id: a.id },
+                "perm" => Op::AddPerm { id: a.id, attrs },
+                "root" => Op::AddRoot { id: a.id, attrs },
                 k => Op::AddNode {
                     kind: k.into(),
                     id: a.id,
@@ -473,6 +569,12 @@ fn run() -> Result<()> {
         }
         Cmd::Edit(e) => {
             let mut ops = vec![];
+            if let Some(kind) = e.kind {
+                ops.push(Op::SetKind {
+                    id: e.id.clone(),
+                    kind,
+                });
+            }
             for kv in e.sets {
                 let (k, v) = kv
                     .split_once('=')
@@ -512,7 +614,11 @@ fn run() -> Result<()> {
         }
         Cmd::Rename { from, to } => apply_ops(&dir, &[Op::Rename { from, to }], false, json)?,
         Cmd::Rm { id, force } => apply_ops(&dir, &[Op::RmNode { id, force }], false, json)?,
-        Cmd::Apply { file, dry_run } => {
+        Cmd::Apply {
+            file,
+            dry_run,
+            continue_on_error,
+        } => {
             let src = if file == "-" {
                 let mut s = String::new();
                 std::io::stdin().read_to_string(&mut s)?;
@@ -522,7 +628,7 @@ fn run() -> Result<()> {
             };
             let ops: Vec<Op> =
                 serde_json::from_str(&src).context("could not parse JSON op list")?;
-            apply_ops(&dir, &ops, dry_run, json)?;
+            apply_ops_ext(&dir, &ops, dry_run, continue_on_error, json)?;
         }
         Cmd::Diff { rev1, rev2 } => {
             let a = graph_at(&dir, &rev1)?;
@@ -591,8 +697,43 @@ fn run() -> Result<()> {
 }
 
 fn apply_ops(dir: &Path, ops: &[Op], dry_run: bool, json: bool) -> Result<()> {
+    apply_ops_ext(dir, ops, dry_run, false, json)
+}
+
+/// Op'ları uygular. Varsayılan atomik: bir op bile düşerse hiçbir şey yazılmaz, tüm düşenler
+/// listelenir (`--dry-run` da aynı listeyi verir). `continue_on_error`: geçenler yazılır.
+fn apply_ops_ext(
+    dir: &Path,
+    ops: &[Op],
+    dry_run: bool,
+    continue_on_error: bool,
+    json: bool,
+) -> Result<()> {
     let mut ws = Workspace::open(dir)?;
-    ws.apply_all(ops)?;
+    let errs = ws.apply_all(ops);
+    if !errs.is_empty() && (!continue_on_error || dry_run) {
+        let list: Vec<String> = errs
+            .iter()
+            .map(|(i, e)| format!("op {i} ({}): {e}", op_name(&ops[*i])))
+            .collect();
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({"written": [], "failed": errs.iter().map(|(i, e)| serde_json::json!({"op": i, "error": e.to_string()})).collect::<Vec<_>>()})
+            );
+        }
+        if !continue_on_error {
+            bail!(
+                "{} of {} ops failed, nothing written:\n  {}",
+                errs.len(),
+                ops.len(),
+                list.join("\n  ")
+            );
+        }
+        for l in &list {
+            eprintln!("skipped {l}");
+        }
+    }
     if dry_run {
         for (f, content) in ws.preview() {
             println!("--- {f}\n{content}");
@@ -618,6 +759,71 @@ fn apply_ops(dir: &Path, ops: &[Op], dry_run: bool, json: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn op_name(op: &Op) -> String {
+    serde_json::to_value(op)
+        .ok()
+        .and_then(|v| v.get("op").and_then(|o| o.as_str()).map(String::from))
+        .unwrap_or_default()
+}
+
+/// Kategori × namespace (ID'nin ilk segmenti, yoksa dosya) tablosu.
+fn lint_summary(d: &[duflow_core::lint::Diagnostic]) -> String {
+    use std::collections::{BTreeMap, BTreeSet};
+    let ns_of = |x: &duflow_core::lint::Diagnostic| -> String {
+        x.id.as_deref()
+            .and_then(|i| i.split('.').next())
+            .map(String::from)
+            .unwrap_or_else(|| {
+                x.file
+                    .split('/')
+                    .next()
+                    .unwrap_or(&x.file)
+                    .trim_end_matches(".kdl")
+                    .to_string()
+            })
+    };
+    let mut table: BTreeMap<&str, BTreeMap<String, usize>> = BTreeMap::new();
+    let mut spaces: BTreeSet<String> = BTreeSet::new();
+    for x in d {
+        let ns = ns_of(x);
+        spaces.insert(ns.clone());
+        *table.entry(x.code).or_default().entry(ns).or_default() += 1;
+    }
+    let spaces: Vec<String> = spaces.into_iter().collect();
+    let mut s = format!("{:<22}", "code");
+    for ns in &spaces {
+        s.push_str(&format!(" {:>8}", if ns.len() > 8 { &ns[..8] } else { ns }));
+    }
+    s.push_str("    total\n");
+    for (code, row) in &table {
+        s.push_str(&format!("{code:<22}"));
+        let mut total = 0;
+        for ns in &spaces {
+            let n = row.get(ns).copied().unwrap_or(0);
+            total += n;
+            s.push_str(&format!(
+                " {:>8}",
+                if n == 0 {
+                    "·".to_string()
+                } else {
+                    n.to_string()
+                }
+            ));
+        }
+        s.push_str(&format!(" {total:>8}\n"));
+    }
+    s
+}
+
+/// `src=` attr'ları için repo kökü: git toplevel, yoksa flows'un üst dizini.
+fn repo_root(dir: &Path) -> PathBuf {
+    git(dir, &["rev-parse", "--show-toplevel"])
+        .ok()
+        .map(|s| PathBuf::from(s.trim()))
+        .or_else(|| dir.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| dir.to_path_buf())
 }
 
 /// Bir git rev'indeki `flows/` dizininden graf.

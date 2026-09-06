@@ -137,18 +137,19 @@ pub fn lint(g: &Graph) -> Vec<Diagnostic> {
                     format!("`{}` → `{}`: target not defined", n.id, e.to),
                 );
             }
-            if let EdgeKind::On { event } = &e.kind {
-                if !g.nodes.get(event).is_some_and(|ev| ev.kind == Kind::Event) {
-                    push(
-                        &mut d,
-                        Level::Warning,
-                        "unknown_event",
-                        &n.file,
-                        e.line,
-                        Some(&n.id),
-                        format!("`on {event}`: not defined as an `event`"),
-                    );
-                }
+            // `on` herhangi bir node'u dinleyebilir (state'e giriş de olaydır); yalnız yoksa uyar
+            if let EdgeKind::On { event } = &e.kind
+                && !g.nodes.contains_key(event)
+            {
+                push(
+                    &mut d,
+                    Level::Warning,
+                    "unknown_event",
+                    &n.file,
+                    e.line,
+                    Some(&n.id),
+                    format!("`on {event}`: no such node"),
+                );
             }
             if let EdgeKind::Calls = e.kind {
                 if g.nodes.get(&e.to).is_some_and(|t| t.kind != Kind::Call) {
@@ -165,7 +166,26 @@ pub fn lint(g: &Graph) -> Vec<Diagnostic> {
             }
             if let Some(w) = &e.when {
                 for v in expr::idents(w) {
-                    if !g.vars.contains_key(&v) {
+                    if g.vars.contains_key(&v) {
+                        continue;
+                    }
+                    if g.is_local_var(&v) {
+                        // yerel sayaç: tanım istemez, grupta bir `sets` ister
+                        if g.local_var_writers(&group_of(&n.id), &v).is_empty() {
+                            push(
+                                &mut d,
+                                Level::Error,
+                                "local_var_never_set",
+                                &n.file,
+                                e.line,
+                                Some(&n.id),
+                                format!(
+                                    "guard `{w}`: local `{v}` is never `sets` in group `{}` (declare a `var` if it is global)",
+                                    group_of(&n.id)
+                                ),
+                            );
+                        }
+                    } else {
                         push(
                             &mut d,
                             Level::Error,
@@ -181,28 +201,31 @@ pub fn lint(g: &Graph) -> Vec<Diagnostic> {
         }
         // check kullanımları
         for c in &n.checks {
-            if n.kind != Kind::Call {
-                push(
-                    &mut d,
-                    Level::Warning,
-                    "check_outside_call",
-                    &n.file,
-                    c.line,
-                    Some(&n.id),
-                    "`check` only makes sense inside a `call`".into(),
-                );
-            }
             let def = g.checks.get(&c.name);
             if def.is_none() {
-                push(
-                    &mut d,
-                    Level::Error,
-                    "unknown_check",
-                    &n.file,
-                    c.line,
-                    Some(&n.id),
-                    format!("`check {}`: not defined", c.name),
-                );
+                match c.name.strip_prefix("perm:") {
+                    Some(p) => push(
+                        &mut d,
+                        Level::Error,
+                        "unknown_perm",
+                        &n.file,
+                        c.line,
+                        Some(&n.id),
+                        format!("`requires {p}`: no such `perm`"),
+                    ),
+                    None => push(
+                        &mut d,
+                        Level::Error,
+                        "unknown_check",
+                        &n.file,
+                        c.line,
+                        Some(&n.id),
+                        format!("`check {}`: not defined", c.name),
+                    ),
+                }
+            }
+            if c.outcome.is_some() {
+                continue;
             }
             let target = c.to.clone().or_else(|| def.and_then(|x| x.fail_to.clone()));
             match target {
@@ -228,7 +251,8 @@ pub fn lint(g: &Graph) -> Vec<Diagnostic> {
             }
         }
         for s in &n.sets {
-            if !g.vars.contains_key(&s.var) {
+            // noktasız ve tanımsız → yerel sayaç, serbest
+            if !g.vars.contains_key(&s.var) && !g.is_local_var(&s.var) {
                 push(
                     &mut d,
                     Level::Error,
@@ -242,9 +266,10 @@ pub fn lint(g: &Graph) -> Vec<Diagnostic> {
         }
         match n.kind {
             Kind::Call
-                if n.edges
-                    .iter()
-                    .all(|e| !matches!(e.kind, EdgeKind::Returns { .. })) =>
+                if n.outcomes.is_empty()
+                    && n.edges
+                        .iter()
+                        .all(|e| !matches!(e.kind, EdgeKind::Returns { .. })) =>
             {
                 push(
                     &mut d,
@@ -269,11 +294,11 @@ pub fn lint(g: &Graph) -> Vec<Diagnostic> {
             }
             _ => {}
         }
-        // guard'sız birden fazla koşulsuz `->`
+        // guard'sız ve etiketsiz birden fazla koşulsuz `->` (case="..." gerçek dallanmayı adlandırır)
         let plain_unguarded = n
             .edges
             .iter()
-            .filter(|e| matches!(e.kind, EdgeKind::Plain) && e.when.is_none())
+            .filter(|e| matches!(e.kind, EdgeKind::Plain) && e.when.is_none() && e.case.is_none())
             .count();
         if plain_unguarded > 1 {
             push(
@@ -320,8 +345,11 @@ pub fn lint(g: &Graph) -> Vec<Diagnostic> {
             );
         }
     }
-    // check tanımları
+    // check tanımları (perm'den türeyenler `perm_unused` altında)
     for c in g.checks.values() {
+        if c.id.starts_with("perm:") {
+            continue;
+        }
         if g.check_users(&c.id).is_empty() {
             push(
                 &mut d,
@@ -360,6 +388,32 @@ pub fn lint(g: &Graph) -> Vec<Diagnostic> {
             }
         }
     }
+    for p in g.perms.values() {
+        if g.perm_users(&p.id).is_empty() {
+            push(
+                &mut d,
+                Level::Warning,
+                "perm_unused",
+                &p.file,
+                p.line,
+                Some(&p.id),
+                format!("perm `{}` is never required", p.id),
+            );
+        }
+        if let Some(t) = &p.fail_to
+            && !g.nodes.contains_key(t)
+        {
+            push(
+                &mut d,
+                Level::Error,
+                "dangling_ref",
+                &p.file,
+                p.line,
+                Some(&p.id),
+                format!("perm `{}` fail target `{t}` not defined", p.id),
+            );
+        }
+    }
     for r in &g.roots {
         if !g.nodes.contains_key(&r.id) {
             push(
@@ -371,7 +425,49 @@ pub fn lint(g: &Graph) -> Vec<Diagnostic> {
                 Some(&r.id),
                 format!("root `{}` not defined", r.id),
             );
+            continue;
         }
+        // giren kenarı olan node root olmamalı (uydurma root freni); self-loop sayılmaz
+        let incoming: Vec<_> = g
+            .incoming_edges(&r.id)
+            .into_iter()
+            .filter(|e| e.from != r.id)
+            .collect();
+        if !incoming.is_empty() {
+            push(
+                &mut d,
+                Level::Warning,
+                "root_has_incoming",
+                &r.file,
+                r.line,
+                Some(&r.id),
+                format!(
+                    "root `{}` already has incoming edges from {}; is it really an entry point?",
+                    r.id,
+                    incoming
+                        .iter()
+                        .take(3)
+                        .map(|e| e.from.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            );
+        }
+    }
+    if g.roots.len() > g.config.max_roots {
+        push(
+            &mut d,
+            Level::Warning,
+            "too_many_roots",
+            "flows",
+            0,
+            None,
+            format!(
+                "{} roots (max_roots {}); entry points should be few, prefer edges",
+                g.roots.len(),
+                g.config.max_roots
+            ),
+        );
     }
     if g.roots.is_empty() && !g.nodes.is_empty() {
         push(
@@ -411,4 +507,260 @@ pub fn lint(g: &Graph) -> Vec<Diagnostic> {
 
 pub fn has_errors(d: &[Diagnostic]) -> bool {
     d.iter().any(|x| x.level == Level::Error)
+}
+
+/// `src="path[#symbol|:line]"` attr'ı repoya karşı: dosya var mı, sembol adı dosyada geçiyor mu.
+/// Graf saf kaldığı için ayrı fonksiyon; CLI `validate` repo köküyle çağırır. Dil bilmez:
+/// sembol araması alt-dize.
+pub fn src_lint(g: &Graph, repo_root: &std::path::Path) -> Vec<Diagnostic> {
+    let mut d = vec![];
+    for n in g.nodes.values() {
+        let Some(src) = n.attrs.get("src") else {
+            continue;
+        };
+        let (path, symbol) = match src.split_once('#') {
+            Some((p, s)) => (p, Some(s)),
+            None => (src.rsplit_once(':').map(|(p, _)| p).unwrap_or(src), None),
+        };
+        let full = repo_root.join(path);
+        let Ok(text) = std::fs::read_to_string(&full) else {
+            d.push(Diagnostic {
+                level: Level::Warning,
+                code: "src_missing",
+                message: format!("`{}`: src file `{path}` not found", n.id),
+                file: n.file.clone(),
+                line: n.line,
+                id: Some(n.id.clone()),
+            });
+            continue;
+        };
+        if let Some(sym) = symbol
+            && !text.contains(sym)
+        {
+            d.push(Diagnostic {
+                level: Level::Warning,
+                code: "src_symbol_missing",
+                message: format!("`{}`: `{sym}` not found in `{path}`", n.id),
+                file: n.file.clone(),
+                line: n.line,
+                id: Some(n.id.clone()),
+            });
+        }
+    }
+    d
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mk(files: &[(&str, &str)]) -> Graph {
+        let src: Vec<(String, String)> = files
+            .iter()
+            .map(|(f, s)| (f.to_string(), s.to_string()))
+            .collect();
+        Graph::from_sources(&src).unwrap()
+    }
+    fn codes(d: &[Diagnostic]) -> Vec<&str> {
+        d.iter().map(|x| x.code).collect()
+    }
+
+    const BASE: &str = r#"
+root "a.start"
+state "a.start" desc="s" { -> "a.mid" }
+"#;
+
+    #[test]
+    fn check_allowed_in_state_and_produces_fail_edge() {
+        let g = mk(&[
+            (
+                "a.kdl",
+                &format!(
+                    "{BASE}\nstate \"a.mid\" desc=\"m\" {{\n  check \"has_ip\" -> \"a.fail\"\n  -> \"a.ok\"\n}}\nstate \"a.ok\" desc=\"o\"\nstate \"a.fail\" desc=\"f\"\n"
+                ),
+            ),
+            ("checks.kdl", "check \"has_ip\" desc=\"ip\"\n"),
+        ]);
+        let d = lint(&g);
+        assert!(!codes(&d).contains(&"check_outside_call"), "{d:?}");
+        assert!(!has_errors(&d), "{d:?}");
+        assert!(
+            g.outgoing("a.mid")
+                .iter()
+                .any(|e| e.to == "a.fail" && e.class == "fail")
+        );
+    }
+
+    #[test]
+    fn case_labelled_fanout_is_not_ambiguous() {
+        let g = mk(&[(
+            "a.kdl",
+            &format!(
+                "{BASE}\nstate \"a.mid\" desc=\"m\" {{\n  -> \"a.x\" case=\"x\"\n  -> \"a.y\" case=\"y\"\n}}\nstate \"a.x\" desc=\"x\"\nstate \"a.y\" desc=\"y\"\n"
+            ),
+        )]);
+        assert!(!codes(&lint(&g)).contains(&"ambiguous_transition"));
+        let g2 = mk(&[(
+            "a.kdl",
+            &format!(
+                "{BASE}\nstate \"a.mid\" desc=\"m\" {{\n  -> \"a.x\"\n  -> \"a.y\"\n}}\nstate \"a.x\" desc=\"x\"\nstate \"a.y\" desc=\"y\"\n"
+            ),
+        )]);
+        assert!(codes(&lint(&g2)).contains(&"ambiguous_transition"));
+    }
+
+    #[test]
+    fn on_may_listen_to_any_node_but_listening_does_not_make_states_reachable() {
+        let g = mk(&[(
+            "a.kdl",
+            &format!(
+                "{BASE}\nstate \"a.mid\" desc=\"m\" {{\n  on \"a.done\" -> \"a.start\"\n  on \"a.ev\" -> \"a.start\"\n  on \"a.ghost\" -> \"a.start\"\n}}\nstate \"a.done\" desc=\"d\"\nevent \"a.ev\" desc=\"e\"\n"
+            ),
+        )]);
+        let d = lint(&g);
+        let ev: Vec<_> = d.iter().filter(|x| x.code == "unknown_event").collect();
+        assert_eq!(ev.len(), 1, "{d:?}");
+        assert!(ev[0].message.contains("a.ghost"));
+        // a.done bir state: dinleniyor diye erişilebilir olmaz; a.ev event: olur
+        assert!(
+            d.iter()
+                .any(|x| x.code == "unreachable" && x.id.as_deref() == Some("a.done")),
+            "{d:?}"
+        );
+        assert!(
+            !d.iter()
+                .any(|x| x.code == "unreachable" && x.id.as_deref() == Some("a.ev")),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    fn local_vars_need_no_definition_but_need_a_writer_in_group() {
+        let g = mk(&[(
+            "a.kdl",
+            &format!(
+                "{BASE}\nstate \"a.mid\" desc=\"m\" {{\n  sets \"retry\" \"+1\"\n  -> \"a.start\" when=\"retry < 3\"\n  -> \"a.ok\" when=\"retry >= 3\"\n}}\nstate \"a.ok\" desc=\"o\" {{\n  -> \"a.start\" when=\"orphan == 1\"\n  sets \"b.global\" \"1\"\n}}\n"
+            ),
+        )]);
+        let d = lint(&g);
+        assert!(
+            !d.iter()
+                .any(|x| x.code == "unknown_var" && x.message.contains("retry")),
+            "{d:?}"
+        );
+        assert!(
+            d.iter()
+                .any(|x| x.code == "local_var_never_set" && x.message.contains("orphan")),
+            "{d:?}"
+        );
+        assert!(
+            d.iter()
+                .any(|x| x.code == "unknown_var" && x.message.contains("b.global")),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    fn requires_resolves_to_perm_check_with_deny_code_and_target() {
+        let g = mk(&[
+            (
+                "a.kdl",
+                &format!(
+                    "{BASE}\ncall \"a.mid\" desc=\"m\" method=\"POST\" path=\"/x\" {{\n  requires \"deploy.trigger\"\n  requires \"ghost\"\n  returns 202 -> \"a.ok\"\n}}\nstate \"a.ok\" desc=\"o\"\nstate \"a.nf\" desc=\"404\"\n"
+                ),
+            ),
+            (
+                "perms.kdl",
+                "perm \"deploy.trigger\" scope=\"project\" deny=404 desc=\"izin\" -> \"a.nf\"\n",
+            ),
+        ]);
+        let d = lint(&g);
+        assert!(g.checks.contains_key("perm:deploy.trigger"));
+        assert!(
+            !d.iter()
+                .any(|x| x.code == "unknown_check" && x.message.contains("deploy.trigger")),
+            "{d:?}"
+        );
+        assert!(
+            d.iter()
+                .any(|x| x.code == "unknown_perm" && x.message.contains("ghost")),
+            "{d:?}"
+        );
+        let e = g
+            .outgoing("a.mid")
+            .iter()
+            .find(|e| e.to == "a.nf")
+            .expect("perm fail edge");
+        assert_eq!(e.class, "fail");
+        assert!(e.label.contains("404"), "{}", e.label);
+        assert_eq!(g.perm_users("deploy.trigger").len(), 1);
+    }
+
+    #[test]
+    fn outcomes_satisfy_fail_target_and_returns_rules() {
+        let g = mk(&[
+            (
+                "a.kdl",
+                &format!(
+                    "{BASE}\ncall \"a.mid\" desc=\"m\" {{\n  check \"has_ip\" fail=409 outcome=\"toast: no ip\"\n  returns 500 outcome=\"toast: boom\"\n}}\n"
+                ),
+            ),
+            ("checks.kdl", "check \"has_ip\" desc=\"ip\"\n"),
+        ]);
+        let d = lint(&g);
+        assert!(!codes(&d).contains(&"check_no_fail_target"), "{d:?}");
+        assert!(!codes(&d).contains(&"call_no_returns"), "{d:?}");
+        assert!(!has_errors(&d), "{d:?}");
+    }
+
+    #[test]
+    fn root_rules() {
+        let g = mk(&[(
+            "a.kdl",
+            &format!(
+                "{BASE}\nstate \"a.mid\" desc=\"m\" {{ -> \"a.ok\" }}\nstate \"a.ok\" desc=\"o\"\nroot \"a.mid\" every=\"30s\"\n"
+            ),
+        )]);
+        let d = lint(&g);
+        assert!(
+            d.iter()
+                .any(|x| x.code == "root_has_incoming" && x.id.as_deref() == Some("a.mid")),
+            "{d:?}"
+        );
+        assert!(
+            !d.iter()
+                .any(|x| x.code == "root_has_incoming" && x.id.as_deref() == Some("a.start")),
+            "{d:?}"
+        );
+        let mut many = String::from(BASE);
+        many.push_str("state \"a.mid\" desc=\"m\"\n");
+        for i in 0..11 {
+            many.push_str(&format!("state \"a.r{i}\" desc=\"r\"\nroot \"a.r{i}\"\n"));
+        }
+        assert!(codes(&lint(&mk(&[("a.kdl", &many)]))).contains(&"too_many_roots"));
+    }
+
+    #[test]
+    fn src_attr_is_checked_against_the_repo() {
+        let dir = std::env::temp_dir().join(format!("duflow-src-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/api.rs"), "pub fn create() {}\n").unwrap();
+        let g = mk(&[(
+            "a.kdl",
+            &format!(
+                "{BASE}\nstate \"a.mid\" desc=\"m\" src=\"src/api.rs#create\"\nstate \"a.x\" desc=\"x\" src=\"src/api.rs#gone\"\nstate \"a.y\" desc=\"y\" src=\"src/nope.rs\"\nstate \"a.z\" desc=\"z\" src=\"src/api.rs:1\"\n"
+            ),
+        )]);
+        let d = src_lint(&g, &dir);
+        let by_id = |id: &str| {
+            d.iter()
+                .find(|x| x.id.as_deref() == Some(id))
+                .map(|x| x.code)
+        };
+        assert_eq!(by_id("a.mid"), None);
+        assert_eq!(by_id("a.x"), Some("src_symbol_missing"));
+        assert_eq!(by_id("a.y"), Some("src_missing"));
+        assert_eq!(by_id("a.z"), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -43,9 +43,10 @@ kod doğrulaması (OpenAPI/route cross-check) v2 eklentisi olarak açık bırak�
 | `action` | Tetik: click, submit, prompt cevabı, CLI komutu. `calls` ile `call` node'larına bağlanır. |
 | `call` | Endpoint / RPC / iç işlem. `check` listesi + `returns` çıkışları. |
 | `event` | Async olay: SSE, webhook, timer, docker event. `state`'ler `on` ile dinler. |
-| `check` | İsimli guard. Başarısız olunca gidilen hedef. Birden çok `call`'da yeniden kullanılır. |
+| `check` | İsimli guard; herhangi bir node içinde kullanılır (call, state, action). Başarısız olunca gidilen hedef ya da node'suz `outcome`. Birden çok yerde yeniden kullanılır. |
+| `perm` | İzin tanımı (`scope`, `deny` kodu, varsayılan fail hedefi). Node'da `requires "x"` = `perm:x` check'i. |
 | `var` | Tipli değişken. `sets` ile yazılır, `when`/`check` ile okunur; ya da `source` ile dış kaynaklı. |
-| `root` | Giriş noktası işareti (login, webhook, scheduler tick). Reachability başlangıcı. |
+| `root` | Giriş noktası işareti (login, webhook, scheduler tick). Reachability başlangıcı. `every="30s"` ile periyodik (reconciler, canlılık turu): sahte kenar yerine root. |
 | `view` | Kaydedilmiş sorgu (bookmark). Veri değil, ayrı dosyada. |
 
 ### 3.2 ID ve hiyerarşi
@@ -68,6 +69,7 @@ tanımlayabilir. UI'daki katman toggle'ı bu attr'ı filtreler.
 project "duploy" {
   layers "ui" "api" "domain"
   watch "dorch/src/api/**" "dorch/src/deploy/**"   // grafı etkileyebilecek kaynak glob'ları (repo köküne göre)
+  max_roots 10                                     // üstü `too_many_roots` uyarısı (varsayılan 10)
 }
 ```
 
@@ -82,13 +84,21 @@ Kenar node'un içinde inline yazılır, ayrı varlık değil:
 |---|---|
 | `-> "x"` | koşulsuz geçiş |
 | `-> "x" when="expr"` | guard'lı geçiş |
-| `on "event.id" -> "x" [when=]` | olay dinleme |
+| `-> "x" case="pool_exhausted"` | etiketli dal: guard'sız gerçek dallanma (fan-out). `case` ya da `when` taşıyan kenar belirsiz sayılmaz |
+| `on "node.id" -> "x" [when=] [case=]` | olay dinleme; hedef `event` ya da herhangi bir node (state'e giriş de olaydır). Yalnız `event`'ler dinlenerek erişilebilir olur |
 | `calls "call.id"` | action → call |
-| `returns 202 -> "x"` / `returns 409 code="..." -> "x"` | call çıkışları |
-| `check "name" fail=409 code="..." [-> "x"]` | call ön kontrolü; `->` yoksa fail hedefi check tanımından |
-| `sets "var.id" "+1"` / `sets "var.id" "0"` | değişken yazımı; değer string, yorumlanmaz |
+| `returns 202 -> "x"` / `returns 200 case="pr" -> "x"` / `returns 409 code="..." -> "x"` | call çıkışları; aynı status birden çok sonuca `case` ile ayrılır |
+| `returns 409 code="..." outcome="toast: volume in use"` | node'suz terminal çıkış (toast, log satırı). UI'da yaprak, aday değil |
+| `check "name" fail=409 code="..." [-> "x" \| outcome="..."]` | ön kontrol; `->` yoksa fail hedefi check tanımındaki **varsayılan**, kullanımdaki `->` onu ezer |
+| `requires "perm.id" [-> "x"]` | izin; `perm` tanımındaki `deny` fail kodu, `fail_to` varsayılan hedef |
+| `sets "var.id" "+1"` / `sets "retry" "0"` | değişken yazımı; değer string, yorumlanmaz |
 
 Aynı hedefe giden birden çok kenar UI'da tek kartta birleşir, etiketler yığılır.
+
+**Yerel sayaçlar.** Guard'daki noktasız isim (`retry`, `attempts`) tanımlı bir `var` değilse yereldir:
+`var` tanımı istemez, `vars` dosyasına girmez; yalnız aynı grupta (ilk iki segment) bir `sets` olmalı
+(`local_var_never_set`). Noktalı isimler ve tanımlı olanlar (`role`) globaldir, `var` ister.
+Global `var` yalnız gerçekten dış kaynaklı ya da gruplar arası okunanlar için.
 
 ## 4. Format (KDL)
 
@@ -112,11 +122,17 @@ state "deploy.rolling.retry" layer="domain" {
 }
 
 // flows/api/deploys.kdl
-call "api.deploys.create" layer="api" method="POST" path="/api/projects/{id}/deploys" {
-  check "perm:deploy.trigger"  fail=404
+call "api.deploys.create" layer="api" method="POST" path="/api/projects/{id}/deploys" src="dorch/src/api/deploys.rs#trigger_deploy" {
+  requires "deploy.trigger"
   check "service_not_frozen"   fail=409 code="service_frozen"   -> "ui.toast.frozen"
-  check "has_success_build"    fail=422 code="no_build"         -> "ui.toast.no_build"
+  check "has_success_build"    fail=422 code="no_build"         outcome="toast: başarılı build yok"
   returns 202 -> "deploy.queued"
+  returns 200 case="noop" -> "ui.project.deploys"
+}
+
+// flows/network.kdl — reconciler: periyodik root, sahte kenar yok
+state "network.liveness" layer="domain" desc="30 sn'de bir node canlılık turu" {
+  check "node_reachable" -> "network.node_down"
 }
 
 // flows/ui/project.kdl
@@ -131,12 +147,15 @@ var "service.replicas" type="int"  source="config:duploy.toml#services.*.replica
 var "role"             type="enum" source="session" values="platform_admin org_admin member"
 
 // flows/checks.kdl
-check "perm:deploy.trigger" desc="Projede deploy.trigger izni" reads="role"
+check "service_not_frozen" desc="Servis restore'da kilitli değil" reads="service.frozen" -> "ui.toast.frozen"
+
+// flows/perms.kdl
+perm "deploy.trigger" scope="project" deny=404 desc="Projede deploy izni" -> "ui.toast.not_found"
 
 // flows/roots.kdl
 root "ui.login"
 root "webhook.github.push"
-root "scheduler.tick"
+root "network.liveness" every="30s"
 
 // flows/views.kdl  (veri değil)
 view "deploy_from_ui" from="ui.login" to="deploy.done"
@@ -145,7 +164,11 @@ view "deploy_from_ui" from="ui.login" to="deploy.done"
 Kurallar:
 - Node tanımı tek yerde; başka dosyalar yalnız ID ile referans verir.
 - `desc` tek satır, insan dili (projenin dilinde). Uzun açıklama `doc` çocuk node'u.
-- `file:line` bilgisi dosyadan gelir, yazılmaz.
+- `file:line` bilgisi dosyadan gelir, yazılmaz. Kod bağı için `src="path#symbol"` (ya da `path:line`)
+  attr'ı: `validate` dosyanın varlığını ve sembol adının dosyada geçtiğini kontrol eder (dil bilmez).
+- Tanımların dosyası: noktalı `var` node'larla aynı ID→dosya kuralı (`deploy.attempts` → `deploy.kdl`),
+  noktasız `var` → `vars.kdl`; `check` → `checks.kdl`, `perm` → `perms.kdl`, `root` → `roots.kdl`.
+  Okurken her dosya kabul edilir; kural yalnız `add`'in nereye yazacağını belirler.
 - Guard ifadesi: `var` isimleri, sayı/string literal, `== != < <= > >= && || !`. Tokenize edilir,
   yorumlanmaz.
 
@@ -158,12 +181,21 @@ Kurallar:
 | ID ↔ dosya yolu uyumsuz | hata |
 | Root'lardan erişilemeyen node | hata |
 | `call` çıkışsız (`returns` yok) | hata |
-| Guard'da tanımsız `var` | hata |
+| Guard'da tanımsız noktalı `var` (`unknown_var`) | hata |
+| Yerel sayaç grupta hiç `sets` edilmiyor (`local_var_never_set`) | hata |
+| `requires` edilen `perm` yok (`unknown_perm`) | hata |
 | Okunan ama hiç `sets`/`source` olmayan `var` | hata |
 | Yazılan ama hiç okunmayan `var` | uyarı |
-| Çok çıkışlı `state`'te guard'sız birden fazla koşulsuz `->` | uyarı (belirsizlik) |
-| `check` tanımı var, hiç kullanılmıyor | uyarı |
+| Birden fazla `when`'siz **ve** `case`'siz `->` (`ambiguous_transition`) | uyarı (belirsizlik) |
+| `on` hedefi hiç yok (`unknown_event`) | uyarı |
+| `check`/`perm` tanımı var, hiç kullanılmıyor | uyarı |
+| Root'un giren kenarı var (`root_has_incoming`) | uyarı (uydurma root freni) |
+| Root sayısı `max_roots` üstü (`too_many_roots`) | uyarı |
+| `src=` dosyası yok / sembol dosyada geçmiyor (`src_missing`, `src_symbol_missing`) | uyarı |
 | `desc` eksik | uyarı |
+
+`validate --prefix deploy` yalnız o namespace'i (ID ya da dosya öneki), `--summary` kategori ×
+namespace tablosunu verir; paralel çalışan ajanlar kendi hatalarını kendileri ayıklar.
 
 CI: `duflow validate` sıfır hata ile geçmeli.
 
@@ -173,18 +205,22 @@ Rust, `clap`, `kdl-rs`, `petgraph`. Tüm komutlar `--json` alır. Exit code: 0 o
 
 | Komut | İş |
 |---|---|
-| `duflow validate` | §5 |
+| `duflow validate [--prefix ns ...] [--summary] [--no-src]` | §5 |
 | `duflow brief <id> [--depth 1]` | AI için tek parça markdown: nasıl gelinir (root'tan en kısa 1-2 yol), okuduğu/yazdığı var'lar, dinlediği event'ler, çıkışları, check'leri, dosya:satır. AI'ın ilk çağrısı budur. |
 | `duflow prereq <id>` | Geriye BFS: bu node'a gelmek için geçilmesi gereken check'ler ve sağlanması gereken guard'lar, zincir halinde. |
 | `duflow path <a> <b> [--all --max 5]` | İki node arası yollar. |
 | `duflow reach <id>` | İleriye erişilebilir küme. |
 | `duflow var <id>` | Kim yazıyor, kim okuyor. |
+| `duflow perm [<id>]` | İzinler; tek izin verilirse onu `requires` eden uçlar ("bu uca kim erişir"). |
 | `duflow search <q>` | ID/desc/check/var üstünde fuzzy. |
-| `duflow add <kind> <id> [attr...]` | Dosyaya yazar, yorumları korur. |
-| `duflow edit <id> <op>...` | Örn. `--set desc="..."`, `--add-edge "-> x when=..."`, `--rm-edge ...`. |
+| `duflow add <kind> <id> [attr...]` | Dosyaya yazar, yorumları korur. `kind`: node türleri + `var check root perm`. |
+| `duflow edit <id> <op>...` | `--set k=v`, `--kind call` (tür değişir, çocuklar kalır), `--child '<kdl>'`, `--rm-edge x`, `--rm-child name:arg`. Tanımlar (var/check/root/perm) da `--set` alır. |
 | `duflow rename <old> <new>` | Tüm referanslar + dosya taşıma. |
-| `duflow rm <id>` | Referans varsa reddeder (`--force` ile referansları da siler). |
-| `duflow apply -` | stdin'den JSON işlem listesi; AI toplu düzenlemesi için. |
+| `duflow rm <id> [--force]` | Node ya da tanım. Referans varsa reddeder; `--force` **referansları da siler** (kenarlar, `sets`, check/requires kullanımları, root/view satırı). Node'u yeniden yazmak için `rm`+`add` değil `edit --kind`. |
+| `duflow apply - [--dry-run] [--continue-on-error]` | stdin'den JSON işlem listesi. Atomik: bir op düşerse hiçbir şey yazılmaz, **tüm** düşen op'lar indeksiyle listelenir; `--dry-run` aynı listeyi verir. |
+
+Yazma kilidi: `Workspace` açılırken dizin başına flock (`$TMPDIR/duflow-lock/<hash>.lock`), commit'e
+kadar tutulur; paralel ajanlar birbirini ezmez, sıraya girer.
 | `duflow diff <rev1> [<rev2>]` | Git rev'leri arası graph diff (eklenen/silinen/değişen node ve kenar; ID bazlı). |
 | `duflow ui build [-o dist]` | Statik site: tek `index.html`, graph JSON gömülü. |
 | `duflow ui serve` | watch + reload. `?diff=a..b` ile diff overlay. |
@@ -202,7 +238,7 @@ skill'in yanına deterministik kapılar koyar, mantık `duflow hook <event>` iç
 |---|---|
 | SessionStart | Baseline: HEAD, kirli dosyaların blob hash'i, `flows/*.kdl` içerik hash'i. Modele proje bağlamı + `watch` listesi. |
 | PostToolUse (Edit/Write) | Dosya `watch` glob'unda ise dosya başına bir kez hedefli hatırlatma (ekranda görünmez, modele context). |
-| Stop | Oturumda `watch` dosyası değişmiş ama `flows/` değişmemişse ya da lint hatası varsa `decision: block`; model ya grafı günceller ya tek cümle "etkilenmedi" der. `stop_hook_active` ikinci gelişte geçirir. |
+| Stop | Oturumda `watch` dosyası değişmiş ama `flows/` değişmemişse ya da **bu oturumda değişen flows dosyalarında** lint hatası varsa `decision: block`; model ya grafı günceller ya tek cümle "etkilenmedi" der. Başka namespace'in hatası bloklamaz (paralel ajanlar). `stop_hook_active` ikinci gelişte geçirir. |
 | PreToolUse (`git commit`) | Lint hatası → `deny`. Drift → sadece uyarı (kod ve flows ayrı commit olabilir). |
 
 `flows/` yoksa, `duflow` PATH'te yoksa ya da baseline yoksa hook sessiz; plugin global kurulunca
@@ -313,6 +349,10 @@ duflow/                      (ayrı repo)
   `service.replicas`, `service.frozen`, `service.has_volume`.
 
 ## 10. Açık sorular / v2
+
+- **Alt-akış / çağırana dönüş.** "Niyet yaz → sync → bekle" kalıbı 5-6 yerde tekrar ediyor. Paylaşılan
+  grup ID ile referanslanabilir ama "çağırana geri dön" (subroutine) grafta yok; parametreli şablon
+  düşünülmedi, tekrar kabul edildi.
 
 - Kod cross-check eklentisi: `call.path` ↔ axum router, `check` ↔ `authz` izin adları.
 - Cross-repo (frontend/backend ayrı): `flows/` paylaşımı ya da `import`.

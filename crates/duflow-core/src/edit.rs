@@ -47,15 +47,9 @@ pub enum Op {
         value: String,
     },
     /// Ham KDL çocuk satırı ekle.
-    AddChild {
-        id: String,
-        line: String,
-    },
+    AddChild { id: String, line: String },
     /// Hedefi `to` olan çocukları sil (`->`, `on`, `returns`, `calls`, `check ... -> to`).
-    RmEdge {
-        id: String,
-        to: String,
-    },
+    RmEdge { id: String, to: String },
     /// Belirli bir çocuk satırını (ad + ilk argüman) sil: örn. `check` + `perm:x`, `sets` + `v`.
     RmChild {
         id: String,
@@ -63,16 +57,17 @@ pub enum Op {
         arg: String,
     },
     /// Node/var/check ID'sini yeniden adlandır; tüm referanslar güncellenir, gerekiyorsa dosya taşınır.
-    Rename {
-        from: String,
-        to: String,
-    },
-    /// Node sil. Referans varsa `force` olmadan reddedilir.
+    Rename { from: String, to: String },
+    /// Node türünü değiştir (`state` → `call`); çocuklar ve yorumlar korunur.
+    SetKind { id: String, kind: String },
+    /// Node ya da tanım (var/check/root/perm) sil. Referans varsa `force` olmadan reddedilir;
+    /// `force` referansları da siler (kenarlar, `sets`, check/requires kullanımları, root satırı).
     RmNode {
         id: String,
         #[serde(default)]
         force: bool,
     },
+    /// Noktalı ID → ID→dosya kuralı (`deploy.attempts` → `deploy.kdl`); noktasız → `vars.kdl`.
     AddVar {
         id: String,
         #[serde(default)]
@@ -83,23 +78,67 @@ pub enum Op {
         #[serde(default)]
         attrs: BTreeMap<String, String>,
     },
+    AddPerm {
+        id: String,
+        #[serde(default)]
+        attrs: BTreeMap<String, String>,
+    },
     AddRoot {
         id: String,
+        #[serde(default)]
+        attrs: BTreeMap<String, String>,
     },
 }
 
-/// Bellekte tutulan dosya kümesi.
+/// Bellekte tutulan dosya kümesi. `open` dizin başına özel bir kilit alır (`$TMPDIR/duflow-lock/`),
+/// `Workspace` düşene kadar tutar: paralel yazan ajanlar birbirinin değişikliğini ezmez.
 pub struct Workspace {
     dir: PathBuf,
     docs: BTreeMap<String, KdlDocument>,
     dirty: BTreeMap<String, bool>,
+    _lock: DirLock,
+}
+
+/// Dizin kilidi: kilit dosyası repoya girmesin diye temp altında, yol hash'iyle adlandırılır.
+/// `std::fs::File::lock` (flock); dosya düşünce kilit de düşer.
+struct DirLock(std::fs::File);
+
+impl DirLock {
+    fn acquire(dir: &Path) -> Result<Self, EditError> {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        dir.canonicalize()
+            .unwrap_or_else(|_| dir.into())
+            .hash(&mut h);
+        let lock_dir = std::env::temp_dir().join("duflow-lock");
+        std::fs::create_dir_all(&lock_dir)?;
+        let path = lock_dir.join(format!("{:016x}.lock", h.finish()));
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)?;
+        file.lock()?;
+        Ok(Self(file))
+    }
+}
+
+impl Drop for DirLock {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
 }
 
 const INDENT: &str = "  ";
 const NODE_KINDS: [&str; 4] = ["state", "action", "call", "event"];
+const DEF_KINDS: [&str; 4] = ["var", "check", "root", "perm"];
+const ALL_KINDS: [&str; 8] = [
+    "state", "action", "call", "event", "var", "check", "root", "perm",
+];
 
 impl Workspace {
     pub fn open(dir: &Path) -> Result<Self, EditError> {
+        let lock = DirLock::acquire(dir)?;
         let mut docs = BTreeMap::new();
         let mut files = vec![];
         if dir.is_dir() {
@@ -126,14 +165,20 @@ impl Workspace {
             dir: dir.into(),
             docs,
             dirty: BTreeMap::new(),
+            _lock: lock,
         })
     }
 
-    pub fn apply_all(&mut self, ops: &[Op]) -> Result<(), EditError> {
-        for op in ops {
-            self.apply(op)?;
+    /// Tümünü uygular; başarısız op atlanır, (indeks, hata) listesi döner. Boş liste = hepsi geçti.
+    /// Çağıran atomiklik isterse liste boş değilken `commit` etmez.
+    pub fn apply_all(&mut self, ops: &[Op]) -> Vec<(usize, EditError)> {
+        let mut errs = vec![];
+        for (i, op) in ops.iter().enumerate() {
+            if let Err(e) = self.apply(op) {
+                errs.push((i, e));
+            }
         }
-        Ok(())
+        errs
     }
 
     pub fn apply(&mut self, op: &Op) -> Result<(), EditError> {
@@ -162,7 +207,7 @@ impl Workspace {
                     node.set_children(ch);
                 }
                 fix_indent(&mut node);
-                let file = file_for_id(id, |f| self.docs.contains_key(f));
+                let file = self.file_for_new(id);
                 self.append_top(&file, node);
                 Ok(())
             }
@@ -221,33 +266,65 @@ impl Workspace {
                 self.dirty.insert(file, true);
                 Ok(())
             }
+            Op::SetKind { id, kind } => {
+                if !NODE_KINDS.contains(&kind.as_str()) {
+                    return Err(EditError::Bad(format!(
+                        "unknown kind `{kind}` (state|action|call|event)"
+                    )));
+                }
+                let (file, node) = self.get_node_mut(id)?;
+                node.set_name(kind.as_str());
+                self.dirty.insert(file, true);
+                Ok(())
+            }
             Op::Rename { from, to } => self.rename(from, to),
             Op::RmNode { id, force } => self.rm_node(id, *force),
-            Op::AddVar { id, attrs } => self.add_def("var", "vars.kdl", id, attrs),
+            Op::AddVar { id, attrs } => {
+                if !is_valid_id(id) {
+                    return Err(EditError::InvalidId(id.clone()));
+                }
+                let file = if id.contains('.') {
+                    self.file_for_new(id)
+                } else {
+                    "vars.kdl".into()
+                };
+                self.add_def("var", &file, id, attrs)
+            }
             Op::AddCheck { id, attrs } => self.add_def("check", "checks.kdl", id, attrs),
-            Op::AddRoot { id } => self.add_def("root", "roots.kdl", id, &BTreeMap::new()),
+            Op::AddPerm { id, attrs } => {
+                if !is_valid_id(id) {
+                    return Err(EditError::InvalidId(id.clone()));
+                }
+                self.add_def("perm", "perms.kdl", id, attrs)
+            }
+            Op::AddRoot { id, attrs } => self.add_def("root", "roots.kdl", id, attrs),
         }
     }
 
     fn add_def(
         &mut self,
         kind: &str,
-        default_file: &str,
+        file: &str,
         id: &str,
         attrs: &BTreeMap<String, String>,
     ) -> Result<(), EditError> {
         if let Some((f, _)) = self.find_top(&[kind], id) {
             return Err(EditError::Exists(id.into(), f));
         }
-        let node = new_top(kind, id, attrs);
-        // aynı türden tanımların olduğu ilk dosyaya, yoksa varsayılana
-        let file = self
-            .docs
-            .iter()
-            .find(|(_, d)| d.nodes().iter().any(|n| n.name().value() == kind))
-            .map(|(f, _)| f.clone())
-            .unwrap_or_else(|| default_file.into());
-        self.append_top(&file, node);
+        let mut node = new_top(kind, id, attrs);
+        // `deny=404` / `fail=409` gibi sayısal alanlar tırnaksız
+        for e in node.entries_mut() {
+            if let (Some(k), KdlValue::String(v)) = (e.name().map(|n| n.value()), e.value().clone())
+                && matches!(k, "deny" | "fail")
+                && let Ok(n) = v.parse::<i128>()
+            {
+                e.set_value(KdlValue::Integer(n));
+                if let Some(f) = e.format_mut() {
+                    f.value_repr = n.to_string();
+                }
+            }
+        }
+        self.append_top(file, node);
         Ok(())
     }
 
@@ -256,7 +333,7 @@ impl Workspace {
             return Err(EditError::InvalidId(to.into()));
         }
         let Some((old_file, kind)) = self
-            .find_top(&["state", "action", "call", "event", "var", "check"], from)
+            .find_top(&ALL_KINDS, from)
             .map(|(f, n)| (f, n.name().value().to_string()))
         else {
             return Err(EditError::NotFound(from.into()));
@@ -277,7 +354,7 @@ impl Workspace {
         }
         // node ise dosya taşıması gerekebilir
         if NODE_KINDS.contains(&kind.as_str()) {
-            let new_file = file_for_id(to, |f| self.docs.contains_key(f));
+            let new_file = self.file_for_new(to);
             if new_file != old_file && !crate::model::allowed_files(to).contains(&old_file) {
                 let node = {
                     let doc = self.docs.get_mut(&old_file).unwrap();
@@ -295,31 +372,60 @@ impl Workspace {
         Ok(())
     }
 
+    /// Node ya da tanım siler. Referans = tür başına: node → kenarlar/root/view/check hedefi;
+    /// var → `sets` ve guard'lar; check → `check` kullanımları; perm → `requires`; root → yok.
     fn rm_node(&mut self, id: &str, force: bool) -> Result<(), EditError> {
-        let Some((file, _)) = self.find_top(&NODE_KINDS, id) else {
+        let Some((file, kind)) = self
+            .find_top(&ALL_KINDS, id)
+            .map(|(f, n)| (f, n.name().value().to_string()))
+        else {
             return Err(EditError::NotFound(id.into()));
         };
-        // referanslar
+        let is_node = NODE_KINDS.contains(&kind.as_str());
+        // bir çocuk satırı bu ID'ye referans veriyor mu
+        let refers = |c: &KdlNode| -> bool {
+            let cname = c.name().value();
+            match kind.as_str() {
+                "var" => {
+                    (cname == "sets" && first_arg(c).as_deref() == Some(id))
+                        || c.entries().iter().any(|e| {
+                            e.name().map(|k| k.value()) == Some("when")
+                                && e.value()
+                                    .as_string()
+                                    .is_some_and(|w| crate::expr::idents(w).iter().any(|i| i == id))
+                        })
+                }
+                "check" => cname == "check" && first_arg(c).as_deref() == Some(id),
+                "perm" => cname == "requires" && first_arg(c).as_deref() == Some(id),
+                "root" => false,
+                _ => edge_targets(c).contains(&id),
+            }
+        };
         let mut refs = vec![];
         for (f, doc) in &self.docs {
             for n in doc.nodes() {
                 let nid = first_arg(n).unwrap_or_default();
-                if nid == id {
+                let name = n.name().value();
+                if name == kind && nid == id {
                     continue;
                 }
-                let name = n.name().value();
-                if (name == "root" || name == "view")
-                    && (nid == id || prop_eq(n, "from", id) || prop_eq(n, "to", id))
-                {
-                    refs.push(format!("{f}: {name} {nid}"));
-                }
-                if name == "check" && prop_or_arrow(n) == Some(id.into()) {
-                    refs.push(format!("{f}: check {nid}"));
-                }
-                if let Some(ch) = n.children() {
-                    if ch.nodes().iter().any(|c| edge_targets(c).contains(&id)) {
-                        refs.push(format!("{f}: {nid}"));
+                if is_node {
+                    if (name == "root" || name == "view")
+                        && (nid == id || prop_eq(n, "from", id) || prop_eq(n, "to", id))
+                    {
+                        refs.push(format!("{f}: {name} {nid}"));
                     }
+                    if (name == "check" || name == "perm") && prop_or_arrow(n) == Some(id.into()) {
+                        refs.push(format!("{f}: {name} {nid}"));
+                    }
+                }
+                if kind == "var" && name == "check" && prop_eq_word(n, "reads", id) {
+                    refs.push(format!("{f}: check {nid} reads"));
+                }
+                if let Some(ch) = n.children()
+                    && ch.nodes().iter().any(refers)
+                {
+                    refs.push(format!("{f}: {nid}"));
                 }
             }
         }
@@ -329,17 +435,22 @@ impl Workspace {
         if force {
             for (f, doc) in self.docs.iter_mut() {
                 let mut touched = false;
-                doc.nodes_mut().retain(|n| {
-                    let name = n.name().value();
-                    let drop = (name == "root" && first_arg(n).as_deref() == Some(id))
-                        || (name == "view" && (prop_eq(n, "from", id) || prop_eq(n, "to", id)));
-                    touched |= drop;
-                    !drop
-                });
+                if is_node {
+                    doc.nodes_mut().retain(|n| {
+                        let name = n.name().value();
+                        let drop = (name == "root" && first_arg(n).as_deref() == Some(id))
+                            || (name == "view" && (prop_eq(n, "from", id) || prop_eq(n, "to", id)));
+                        touched |= drop;
+                        !drop
+                    });
+                }
                 for n in doc.nodes_mut() {
                     if let Some(ch) = n.children_mut() {
                         let before = ch.nodes().len();
-                        ch.nodes_mut().retain(|c| !edge_targets(c).contains(&id));
+                        // guard'lı kenar var silinince kenar değil guard kalır; lint yakalar
+                        ch.nodes_mut().retain(|c| {
+                            !(refers(c) && !(kind == "var" && c.name().value() != "sets"))
+                        });
                         touched |= before != ch.nodes().len();
                     }
                     normalize_children(n);
@@ -350,11 +461,26 @@ impl Workspace {
             }
         }
         let doc = self.docs.get_mut(&file).unwrap();
-        doc.nodes_mut().retain(|n| {
-            !(NODE_KINDS.contains(&n.name().value()) && first_arg(n).as_deref() == Some(id))
-        });
+        doc.nodes_mut()
+            .retain(|n| !(n.name().value() == kind && first_arg(n).as_deref() == Some(id)));
         self.dirty.insert(file, true);
         Ok(())
+    }
+
+    /// Yeni node'un dosyası (`model::file_for_id`); `has_group` dosyadaki ID'lere bakar.
+    fn file_for_new(&self, id: &str) -> String {
+        file_for_id(
+            id,
+            |f| self.docs.contains_key(f),
+            |f, prefix| {
+                self.docs.get(f).is_some_and(|d| {
+                    d.nodes().iter().any(|n| {
+                        NODE_KINDS.contains(&n.name().value())
+                            && first_arg(n).is_some_and(|a| a.starts_with(prefix))
+                    })
+                })
+            },
+        )
     }
 
     fn find_top(&self, kinds: &[&str], id: &str) -> Option<(String, &KdlNode)> {
@@ -368,15 +494,22 @@ impl Workspace {
         None
     }
 
+    /// Node ya da tanım (var/check/root/perm); node'lar önce aranır.
     fn get_node_mut(&mut self, id: &str) -> Result<(String, &mut KdlNode), EditError> {
-        for (f, doc) in self.docs.iter_mut() {
-            if let Some(n) = doc.nodes_mut().iter_mut().find(|n| {
-                NODE_KINDS.contains(&n.name().value()) && first_arg(n).as_deref() == Some(id)
-            }) {
-                return Ok((f.clone(), n));
-            }
-        }
-        Err(EditError::NotFound(id.into()))
+        let found = self
+            .find_top(&NODE_KINDS, id)
+            .or_else(|| self.find_top(&DEF_KINDS, id))
+            .map(|(f, n)| (f, n.name().value().to_string()));
+        let Some((file, kind)) = found else {
+            return Err(EditError::NotFound(id.into()));
+        };
+        let doc = self.docs.get_mut(&file).unwrap();
+        let n = doc
+            .nodes_mut()
+            .iter_mut()
+            .find(|n| n.name().value() == kind && first_arg(n).as_deref() == Some(id))
+            .unwrap();
+        Ok((file, n))
     }
 
     fn append_top(&mut self, file: &str, mut node: KdlNode) {
@@ -583,6 +716,16 @@ fn prop_eq(n: &KdlNode, key: &str, v: &str) -> bool {
         .any(|e| e.name().map(|k| k.value()) == Some(key) && e.value().as_string() == Some(v))
 }
 
+/// Boşlukla ayrılmış liste prop'unda (`reads="a b"`) kelime var mı.
+fn prop_eq_word(n: &KdlNode, key: &str, word: &str) -> bool {
+    n.entries().iter().any(|e| {
+        e.name().map(|k| k.value()) == Some(key)
+            && e.value()
+                .as_string()
+                .is_some_and(|s| s.split_whitespace().any(|w| w == word))
+    })
+}
+
 fn prop_or_arrow(n: &KdlNode) -> Option<String> {
     let args: Vec<&KdlEntry> = n.entries().iter().filter(|e| e.name().is_none()).collect();
     if let Some(i) = args
@@ -615,7 +758,7 @@ fn edge_targets(c: &KdlNode) -> Vec<&str> {
             .into_iter()
             .collect(),
         "calls" => args.iter().filter_map(|e| e.value().as_string()).collect(),
-        "on" | "returns" | "check" => {
+        "on" | "returns" | "check" | "requires" => {
             let i = args
                 .iter()
                 .position(|e| e.value().as_string() == Some("->"));
@@ -695,7 +838,7 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
 mod tests {
     use super::*;
 
-    fn ws(files: &[(&str, &str)]) -> (tempdir::Dir, Workspace) {
+    pub(super) fn ws(files: &[(&str, &str)]) -> (tempdir::Dir, Workspace) {
         let d = tempdir::Dir::new();
         for (f, s) in files {
             let p = d.path.join(f);
@@ -706,7 +849,7 @@ mod tests {
         (d, w)
     }
 
-    mod tempdir {
+    pub(super) mod tempdir {
         pub struct Dir {
             pub path: std::path::PathBuf,
         }
@@ -738,7 +881,7 @@ mod tests {
         }
     }
 
-    const ROLLING: &str = "// rolling akışı\nstate \"deploy.rolling.retry\" layer=\"domain\" {\n  desc \"Deneme sayacı artar\" // yorum\n  sets \"deploy.attempts\" \"+1\"\n  -> \"deploy.rolling.rollback\" when=\"deploy.attempts >= 3\"\n}\n";
+    pub(super) const ROLLING: &str = "// rolling akışı\nstate \"deploy.rolling.retry\" layer=\"domain\" {\n  desc \"Deneme sayacı artar\" // yorum\n  sets \"deploy.attempts\" \"+1\"\n  -> \"deploy.rolling.rollback\" when=\"deploy.attempts >= 3\"\n}\n";
 
     #[test]
     fn add_child_preserves_comments_and_indent() {
@@ -851,5 +994,236 @@ mod tests {
         assert!(out.contains("desc=\"Yeni\""), "{out}");
         assert!(!out.contains("rollback"), "{out}");
         assert!(out.contains("sets"), "{out}");
+    }
+}
+
+#[cfg(test)]
+mod tests2 {
+    use super::tests::ws;
+    use super::*;
+
+    #[test]
+    fn three_segment_ids_go_to_grouped_file_even_if_flat_file_exists() {
+        let (_d, mut w) = ws(&[("ui.kdl", "action \"ui.login\" desc=\"l\"\n")]);
+        w.apply(&Op::AddNode {
+            kind: "action".into(),
+            id: "ui.project.open".into(),
+            attrs: BTreeMap::new(),
+            children: vec![],
+        })
+        .unwrap();
+        let p = w.preview();
+        assert!(p.contains_key("ui/project.kdl"), "{p:?}");
+        // eski düzen: ui.kdl zaten ui.deploy.* barındırıyorsa oraya devam
+        let (_d, mut w) = ws(&[("ui.kdl", "action \"ui.deploy.a\" desc=\"l\"\n")]);
+        w.apply(&Op::AddNode {
+            kind: "action".into(),
+            id: "ui.deploy.b".into(),
+            attrs: BTreeMap::new(),
+            children: vec![],
+        })
+        .unwrap();
+        let p = w.preview();
+        assert!(
+            p.contains_key("ui.kdl") && !p.contains_key("ui/deploy.kdl"),
+            "{p:?}"
+        );
+    }
+
+    #[test]
+    fn set_kind_keeps_children_and_comments() {
+        let (_d, mut w) = ws(&[("deploy/rolling.kdl", super::tests::ROLLING)]);
+        w.apply(&Op::SetKind {
+            id: "deploy.rolling.retry".into(),
+            kind: "call".into(),
+        })
+        .unwrap();
+        let out = &w.preview()["deploy/rolling.kdl"];
+        assert!(
+            out.starts_with("// rolling akışı\ncall \"deploy.rolling.retry\" layer=\"domain\" {\n"),
+            "{out}"
+        );
+        assert!(
+            out.contains("// yorum") && out.contains("sets \"deploy.attempts\""),
+            "{out}"
+        );
+        assert!(matches!(
+            w.apply(&Op::SetKind {
+                id: "deploy.rolling.retry".into(),
+                kind: "perm".into()
+            }),
+            Err(EditError::Bad(_))
+        ));
+    }
+
+    #[test]
+    fn defs_can_be_edited_and_removed() {
+        let (_d, mut w) = ws(&[
+            ("deploy/rolling.kdl", super::tests::ROLLING),
+            ("vars.kdl", "var \"deploy.attempts\" type=\"int\"\n"),
+            ("checks.kdl", "check \"has_ip\" desc=\"ip\"\n"),
+            ("roots.kdl", "root \"deploy.rolling.retry\"\n"),
+            ("perms.kdl", "perm \"deploy.trigger\" deny=404\n"),
+            (
+                "api.kdl",
+                "call \"api.x\" { check \"has_ip\" fail=409 -> \"deploy.rolling.retry\"\n requires \"deploy.trigger\"\n returns 200 -> \"deploy.rolling.retry\" }\n",
+            ),
+        ]);
+        w.apply(&Op::SetAttr {
+            id: "has_ip".into(),
+            key: "reads".into(),
+            value: "role".into(),
+        })
+        .unwrap();
+        w.apply(&Op::SetAttr {
+            id: "deploy.trigger".into(),
+            key: "scope".into(),
+            value: "project".into(),
+        })
+        .unwrap();
+        w.apply(&Op::SetAttr {
+            id: "deploy.attempts".into(),
+            key: "type".into(),
+            value: "string".into(),
+        })
+        .unwrap();
+        let p = w.preview();
+        assert!(
+            p["checks.kdl"].contains("reads=\"role\""),
+            "{}",
+            p["checks.kdl"]
+        );
+        assert!(p["perms.kdl"].contains("scope=\"project\""));
+        assert!(p["vars.kdl"].contains("type=\"string\""));
+        // referanslı tanım: force gerekir; force kullanımları da siler
+        assert!(matches!(
+            w.apply(&Op::RmNode {
+                id: "has_ip".into(),
+                force: false
+            }),
+            Err(EditError::Referenced(..))
+        ));
+        assert!(matches!(
+            w.apply(&Op::RmNode {
+                id: "deploy.attempts".into(),
+                force: false
+            }),
+            Err(EditError::Referenced(..))
+        ));
+        w.apply(&Op::RmNode {
+            id: "has_ip".into(),
+            force: true,
+        })
+        .unwrap();
+        w.apply(&Op::RmNode {
+            id: "deploy.trigger".into(),
+            force: true,
+        })
+        .unwrap();
+        w.apply(&Op::RmNode {
+            id: "deploy.attempts".into(),
+            force: true,
+        })
+        .unwrap();
+        w.apply(&Op::RmNode {
+            id: "deploy.rolling.retry".into(),
+            force: true,
+        })
+        .unwrap();
+        let p = w.preview();
+        assert!(
+            !p["api.kdl"].contains("has_ip") && !p["api.kdl"].contains("requires"),
+            "{}",
+            p["api.kdl"]
+        );
+        assert!(
+            p["checks.kdl"].trim().is_empty()
+                && p["perms.kdl"].trim().is_empty()
+                && p["vars.kdl"].trim().is_empty()
+        );
+        assert!(p["roots.kdl"].trim().is_empty(), "{}", p["roots.kdl"]);
+    }
+
+    #[test]
+    fn defs_go_to_id_files_or_shared_files() {
+        let (_d, mut w) = ws(&[("deploy.kdl", "state \"deploy.done\" desc=\"d\"\n")]);
+        w.apply(&Op::AddVar {
+            id: "deploy.attempts".into(),
+            attrs: BTreeMap::from([("type".to_string(), "int".to_string())]),
+        })
+        .unwrap();
+        w.apply(&Op::AddVar {
+            id: "role".into(),
+            attrs: BTreeMap::new(),
+        })
+        .unwrap();
+        w.apply(&Op::AddPerm {
+            id: "deploy.trigger".into(),
+            attrs: BTreeMap::from([("deny".to_string(), "404".to_string())]),
+        })
+        .unwrap();
+        w.apply(&Op::AddRoot {
+            id: "deploy.done".into(),
+            attrs: BTreeMap::from([("every".to_string(), "30s".to_string())]),
+        })
+        .unwrap();
+        let p = w.preview();
+        assert!(
+            p["deploy.kdl"].contains("var \"deploy.attempts\" type=\"int\""),
+            "{}",
+            p["deploy.kdl"]
+        );
+        assert!(p["vars.kdl"].contains("var \"role\""));
+        assert!(
+            p["perms.kdl"].contains("perm \"deploy.trigger\" deny=404"),
+            "{}",
+            p["perms.kdl"]
+        );
+        assert!(
+            p["roots.kdl"].contains("root \"deploy.done\" every=\"30s\""),
+            "{}",
+            p["roots.kdl"]
+        );
+    }
+
+    #[test]
+    fn apply_all_reports_every_failing_op() {
+        let (_d, mut w) = ws(&[("deploy/rolling.kdl", super::tests::ROLLING)]);
+        let errs = w.apply_all(&[
+            Op::SetAttr {
+                id: "nope.a".into(),
+                key: "desc".into(),
+                value: "x".into(),
+            },
+            Op::SetAttr {
+                id: "deploy.rolling.retry".into(),
+                key: "desc".into(),
+                value: "ok".into(),
+            },
+            Op::RmEdge {
+                id: "deploy.rolling.retry".into(),
+                to: "ghost".into(),
+            },
+        ]);
+        assert_eq!(errs.iter().map(|(i, _)| *i).collect::<Vec<_>>(), vec![0, 2]);
+        assert!(w.preview()["deploy/rolling.kdl"].contains("desc=\"ok\""));
+    }
+
+    #[test]
+    fn workspace_holds_an_exclusive_lock_until_dropped() {
+        let (d, w) = ws(&[("deploy/rolling.kdl", super::tests::ROLLING)]);
+        let path = d.path.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _w2 = Workspace::open(&path).unwrap();
+            tx.send(()).unwrap();
+        });
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_millis(300))
+                .is_err(),
+            "second open should block"
+        );
+        drop(w);
+        assert!(rx.recv_timeout(std::time::Duration::from_secs(5)).is_ok());
     }
 }

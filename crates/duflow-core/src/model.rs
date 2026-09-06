@@ -66,6 +66,10 @@ pub struct Edge {
     /// Guard ifadesi; yorumlanmaz, içindeki var isimleri lint'lenir.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub when: Option<String>,
+    /// Dal etiketi (`case="pool_exhausted"`): guard'sız gerçek dallanmayı adlandırır;
+    /// `case` ya da `when` taşıyan kenar `ambiguous_transition` sayılmaz.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub case: Option<String>,
     pub line: usize,
 }
 
@@ -87,11 +91,17 @@ impl Edge {
                 None => format!("{check} ✗"),
             },
         };
-        match (&self.when, base.is_empty()) {
-            (Some(w), true) => format!("when {w}"),
-            (Some(w), false) => format!("{base} · when {w}"),
-            (None, _) => base,
+        let mut parts: Vec<String> = vec![];
+        if !base.is_empty() {
+            parts.push(base);
         }
+        if let Some(c) = &self.case {
+            parts.push(format!("case {c}"));
+        }
+        if let Some(w) = &self.when {
+            parts.push(format!("when {w}"));
+        }
+        parts.join(" · ")
     }
 
     /// UI sınıfı: `fail` (hata dalı), `guard`, ya da boş.
@@ -118,7 +128,32 @@ pub struct CheckUse {
     /// `-> "x"` verilmişse hedef; yoksa check tanımındaki `fail_to`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub to: Option<String>,
+    /// Node'suz son (`outcome="toast: ..."`): fail'de gidilen yer bir state değil, serbest metin.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub outcome: Option<String>,
     pub line: usize,
+}
+
+/// `returns 409 code="x" outcome="..."`: hedef node'u olmayan terminal çıkış.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Outcome {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    pub text: String,
+    pub line: usize,
+}
+
+impl Outcome {
+    pub fn label(&self) -> String {
+        match (self.status, &self.code) {
+            (Some(s), Some(c)) => format!("{s} {c}"),
+            (Some(s), None) => s.to_string(),
+            (None, Some(c)) => c.clone(),
+            (None, None) => "ok".into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -146,6 +181,8 @@ pub struct Node {
     pub checks: Vec<CheckUse>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub sets: Vec<SetVar>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub outcomes: Vec<Outcome>,
     pub file: String,
     pub line: usize,
 }
@@ -180,11 +217,32 @@ pub struct CheckDef {
     pub line: usize,
 }
 
+/// İzin tanımı. `requires "x"` kullanımı `perm:x` adlı sentetik bir check'e çözülür
+/// (`Graph::reindex`); `deny` fail kodu, `fail_to` varsayılan hedef.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PermDef {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub desc: Option<String>,
+    /// `project | org | system` gibi serbest kapsam etiketi
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deny: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fail_to: Option<String>,
+    pub file: String,
+    pub line: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RootDef {
     pub id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub desc: Option<String>,
+    /// Periyodik giriş (reconciler, canlılık turu): `every="30s"`. Sahte kenar yerine root.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub every: Option<String>,
     pub file: String,
     pub line: usize,
 }
@@ -208,6 +266,13 @@ pub struct ProjectConfig {
     /// Grafı etkileyebilecek kaynak dosya glob'ları (repo köküne göre). Editor hook'ları
     /// bu dosyalar değişince `flows/` güncellenmiş mi diye bakar.
     pub watch: Vec<String>,
+    /// Bu sayının üstünde root → `too_many_roots` uyarısı (root uydurmayı frenler).
+    #[serde(default = "default_max_roots")]
+    pub max_roots: usize,
+}
+
+fn default_max_roots() -> usize {
+    10
 }
 
 impl Default for ProjectConfig {
@@ -216,6 +281,7 @@ impl Default for ProjectConfig {
             name: "flows".into(),
             layers: vec!["ui".into(), "api".into(), "domain".into()],
             watch: vec![],
+            max_roots: default_max_roots(),
         }
     }
 }
@@ -226,9 +292,15 @@ pub struct FileItems {
     pub nodes: Vec<Node>,
     pub vars: Vec<VarDef>,
     pub checks: Vec<CheckDef>,
+    pub perms: Vec<PermDef>,
     pub roots: Vec<RootDef>,
     pub views: Vec<ViewDef>,
     pub config: Option<ProjectConfig>,
+}
+
+/// `requires "x"` kullanımının çözüldüğü check adı.
+pub fn perm_check_id(perm: &str) -> String {
+    format!("perm:{perm}")
 }
 
 /// ID sözdizimi: `[a-z0-9_]+(\.[a-z0-9_]+)*`; check adlarında `:` de olur (`perm:deploy.trigger`).
@@ -269,9 +341,29 @@ pub fn allowed_files(id: &str) -> Vec<String> {
     }
 }
 
-/// Yeni node için dosya: var olan izinli dosya, yoksa tercih edilen.
-pub fn file_for_id(id: &str, exists: impl Fn(&str) -> bool) -> String {
+/// Yeni node için dosya. `exists(f)`: dosya var mı; `has_group(f, prefix)`: dosyada
+/// `prefix` ile başlayan bir ID tanımlı mı.
+///
+/// 3+ segment (`a.b.c`) her zaman `a/b.kdl`; tek istisna `a.kdl` zaten `a.b.*` grubunu
+/// barındırıyorsa (eski düzen) oraya devam edilir. Aksi halde `a.kdl` ikinci segmentli
+/// ID'lerle (`a.b`) bir kez oluşunca tüm `a.*` oraya yığılıyordu.
+/// 2 segment (`a.b`): `a/b.kdl` varsa oraya, yoksa `a.kdl`.
+pub fn file_for_id(
+    id: &str,
+    exists: impl Fn(&str) -> bool,
+    has_group: impl Fn(&str, &str) -> bool,
+) -> String {
     let allowed = allowed_files(id);
+    let segs: Vec<&str> = id.split('.').collect();
+    if segs.len() >= 3 {
+        let grouped = format!("{}/{}.kdl", segs[0], segs[1]);
+        let flat = format!("{}.kdl", segs[0]);
+        let prefix = format!("{}.{}.", segs[0], segs[1]);
+        if !exists(&grouped) && exists(&flat) && has_group(&flat, &prefix) {
+            return flat;
+        }
+        return grouped;
+    }
     allowed
         .iter()
         .find(|f| exists(f))

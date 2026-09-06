@@ -122,9 +122,25 @@ pub fn parse_file(file: &str, src: &str) -> Result<FileItems, ParseError> {
             "state" | "action" | "call" | "event" => items.nodes.push(parse_node(&cx, node)?),
             "var" => items.vars.push(parse_var(&cx, node)?),
             "check" => items.checks.push(parse_check(&cx, node)?),
+            "perm" => {
+                let id = first_id(&cx, node)?;
+                if !is_valid_id(&id) {
+                    return Err(cx.err(node, format!("invalid perm ID `{id}`")));
+                }
+                items.perms.push(PermDef {
+                    id,
+                    desc: prop_str(node, "desc").or_else(|| child_str(node, "desc")),
+                    scope: prop_str(node, "scope"),
+                    deny: prop_u16(node, "deny"),
+                    fail_to: arrow_target(node).or_else(|| prop_str(node, "fail_to")),
+                    file: file.into(),
+                    line: cx.line(node),
+                });
+            }
             "root" => items.roots.push(RootDef {
                 id: first_id(&cx, node)?,
                 desc: prop_str(node, "desc").or_else(|| child_str(node, "desc")),
+                every: prop_str(node, "every"),
                 file: file.into(),
                 line: cx.line(node),
             }),
@@ -194,6 +210,7 @@ fn parse_node(cx: &Ctx, node: &KdlNode) -> Result<Node, ParseError> {
         edges: vec![],
         checks: vec![],
         sets: vec![],
+        outcomes: vec![],
         file: cx.file.into(),
         line: cx.line(node),
     };
@@ -211,6 +228,7 @@ fn parse_node(cx: &Ctx, node: &KdlNode) -> Result<Node, ParseError> {
         let line = cx.line(c);
         let cname = c.name().value();
         let when = prop_str(c, "when");
+        let case = prop_str(c, "case");
         match cname {
             "desc" => n.desc = args(c).first().map(|v| val_str(v)),
             "doc" => n.doc = args(c).first().map(|v| val_str(v)),
@@ -223,6 +241,7 @@ fn parse_node(cx: &Ctx, node: &KdlNode) -> Result<Node, ParseError> {
                     to,
                     kind: EdgeKind::Plain,
                     when,
+                    case,
                     line,
                 });
             }
@@ -237,6 +256,7 @@ fn parse_node(cx: &Ctx, node: &KdlNode) -> Result<Node, ParseError> {
                     to,
                     kind: EdgeKind::On { event },
                     when,
+                    case,
                     line,
                 });
             }
@@ -257,15 +277,27 @@ fn parse_node(cx: &Ctx, node: &KdlNode) -> Result<Node, ParseError> {
                         );
                     }
                 };
-                let to = arrow_target(c)
-                    .ok_or_else(|| cx.err(c, "`returns` requires `-> \"target\"`"))?;
                 let code = prop_str(c, "code").or(tag);
-                n.edges.push(Edge {
-                    to,
-                    kind: EdgeKind::Returns { status, code },
-                    when,
-                    line,
-                });
+                match (arrow_target(c), prop_str(c, "outcome")) {
+                    (Some(to), _) => n.edges.push(Edge {
+                        to,
+                        kind: EdgeKind::Returns { status, code },
+                        when,
+                        case,
+                        line,
+                    }),
+                    (None, Some(text)) => n.outcomes.push(Outcome {
+                        status,
+                        code,
+                        text,
+                        line,
+                    }),
+                    (None, None) => {
+                        return Err(
+                            cx.err(c, "`returns` requires `-> \"target\"` or `outcome=\"...\"`")
+                        );
+                    }
+                }
             }
             "calls" => {
                 for v in args(c) {
@@ -273,6 +305,7 @@ fn parse_node(cx: &Ctx, node: &KdlNode) -> Result<Node, ParseError> {
                         to: val_str(v),
                         kind: EdgeKind::Calls,
                         when: when.clone(),
+                        case: case.clone(),
                         line,
                     });
                 }
@@ -287,8 +320,22 @@ fn parse_node(cx: &Ctx, node: &KdlNode) -> Result<Node, ParseError> {
                     fail: prop_u16(c, "fail"),
                     code: prop_str(c, "code"),
                     to: arrow_target(c),
+                    outcome: prop_str(c, "outcome"),
                     line,
                 });
+            }
+            "requires" => {
+                // `requires "deploy.trigger" [-> "x"]`: perm tanımına bağlı sentetik check
+                for v in args(c).iter().take_while(|v| v.as_string() != Some("->")) {
+                    n.checks.push(CheckUse {
+                        name: perm_check_id(&val_str(v)),
+                        fail: prop_u16(c, "fail"),
+                        code: prop_str(c, "code"),
+                        to: arrow_target(c),
+                        outcome: prop_str(c, "outcome"),
+                        line,
+                    });
+                }
             }
             "sets" => {
                 let a = args(c);
@@ -425,5 +472,57 @@ project "duploy" {
                 "dorch/ui/src/views/**"
             ]
         );
+    }
+
+    #[test]
+    fn parses_case_labels_outcomes_requires_and_periodic_roots() {
+        let src = r#"
+state "event.published" layer="domain" desc="x" {
+  check "pool_has_ip" fail=409 outcome="IP havuzu dolu"
+  -> "deploy.a" case="deploy"
+  -> "deploy.b" case="build"
+  on "deploy.done" -> "deploy.a" case="late"
+}
+call "api.x.save" method="POST" path="/x" {
+  requires "deploy.trigger"
+  requires "org.admin" -> "ui.forbidden"
+  returns 200 case="pr" -> "x.pr"
+  returns 200 case="apply" -> "x.apply"
+  returns 409 code="volume_in_use" outcome="toast: volume in use"
+}
+perm "deploy.trigger" scope="project" deny=404 desc="Projede deploy izni" -> "ui.not_found"
+root "network.liveness" every="30s"
+"#;
+        let it = parse_file("t.kdl", src).unwrap();
+        let ev = &it.nodes[0];
+        assert_eq!(ev.checks[0].outcome.as_deref(), Some("IP havuzu dolu"));
+        assert_eq!(ev.checks[0].to, None);
+        assert_eq!(ev.edges[0].case.as_deref(), Some("deploy"));
+        assert_eq!(ev.edges[0].label(), "case deploy");
+        assert_eq!(ev.edges[2].case.as_deref(), Some("late"));
+        assert_eq!(ev.edges[2].label(), "on deploy.done · case late");
+        let call = &it.nodes[1];
+        // requires → perm:<id> check kullanımı; fail/hedef perm tanımından gelir
+        assert_eq!(call.checks[0].name, "perm:deploy.trigger");
+        assert_eq!(call.checks[0].fail, None);
+        assert_eq!(call.checks[1].to.as_deref(), Some("ui.forbidden"));
+        assert_eq!(call.edges[0].label(), "200 · case pr");
+        assert_eq!(call.edges.len(), 2);
+        assert_eq!(call.outcomes.len(), 1);
+        assert_eq!(call.outcomes[0].status, Some(409));
+        assert_eq!(call.outcomes[0].code.as_deref(), Some("volume_in_use"));
+        assert_eq!(call.outcomes[0].text, "toast: volume in use");
+        let perm = &it.perms[0];
+        assert_eq!(perm.id, "deploy.trigger");
+        assert_eq!(perm.scope.as_deref(), Some("project"));
+        assert_eq!(perm.deny, Some(404));
+        assert_eq!(perm.fail_to.as_deref(), Some("ui.not_found"));
+        assert_eq!(it.roots[0].every.as_deref(), Some("30s"));
+    }
+
+    #[test]
+    fn returns_without_target_or_outcome_is_an_error() {
+        let err = parse_file("t.kdl", "call \"a.b\" { returns 500 }\n").unwrap_err();
+        assert!(err.to_string().contains("returns"), "{err}");
     }
 }

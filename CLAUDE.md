@@ -52,7 +52,10 @@ Repo: github.com/duhanbalci/duflow (public). Release asset adı `duflow-v<ver>-<
 - ID→dosya kuralı: `a.b` → `a.kdl` ya da `a/b.kdl`; `a.b.c…` → `a/b.kdl` ya da `a.kdl` (`model::allowed_files`). `add` var olanı seçer.
 - Lint'te "erişilebilirlik" `on` ile dinlenen event'leri de kapsar (`Graph::listened_events`).
 - UI Walk = **konveyör**: 5 eşit slot `[gizli-sol][geçmiş][şimdi][adaylar][ufuk/gelen]`, bant tek `translateX` ile kayar; ileri: seçilenin devamı sağ slota statik çizilir → kay → `go()` → bant sıfırlanır (görüntü aynı). Kart bazlı FLIP yok, animasyon sırasında ölçüm/çizim yok. Hover **yerel** (Walk.vue), store'a koyma; teller ve etiketler bant içindeki tek SVG'de; slot (`overflow:auto`) dışına taşan hiçbir şey kartta olmasın.
-- Export şeması değişirse `export.rs::SCHEMA_VERSION` ve `ui/src/graph.ts` tipleri birlikte.
+- Export şeması değişirse `export.rs::SCHEMA_VERSION` ve `ui/src/graph.ts` tipleri birlikte (şu an 2: `in`, `outcomes`, `every`, `perms`).
+- `edit.rs`: `Workspace::open` dizin kilidi alır (`$TMPDIR/duflow-lock/`), düşene kadar tutar. `apply_all` hataları toplar, atomiklik CLI'da. `rm` her türü siler (`--force` referansları da). Tanım dosyaları: noktalı var → ID kuralı, noktasız var → `vars.kdl`, check/perm/root → `checks/perms/roots.kdl`.
+- `requires "x"` parse'ta `perm:x` check kullanımına dönüşür; `Graph::reindex` perm'den sentetik `CheckDef` üretir, `fail` kodunu `deny`'dan doldurur.
+- Yerel var: guard'daki noktasız, tanımsız isim (`Graph::is_local_var`); lint aynı grupta `sets` arar.
 - Commit mesajları kısa, Conventional Commits, attribution yok.
 - Hook'lar (`hook.rs`): SessionStart baseline yazar (`$TMPDIR/duflow-hook/<session>.json`: HEAD, kirli dosya hash'leri, flows/ hash'leri), PostToolUse `watch` glob'una uyan dosyada tek seferlik hatırlatma, Stop drift/lint varsa `decision: block`, PreToolUse `git commit` lint hatasında `deny`. Baseline yoksa sessiz. `flows/` gitignore'lu olsa da hash ile izlenir.
 - Plugin sürümü `plugin.json` + `marketplace.json`'da; `just release` ikisini de bump'lar.

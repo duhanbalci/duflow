@@ -16,7 +16,7 @@ use duflow_core::lint::{Level, lint};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -234,15 +234,49 @@ fn watched(dir: &Path) -> Result<(GlobSet, Vec<String>)> {
     Ok((globs(&g.config.watch)?, g.config.watch))
 }
 
-fn lint_errors(dir: &Path) -> Vec<String> {
+/// Lint hataları; `only` verilirse yalnız o (flows'a göreli) dosyalardakiler. Paralel çalışan
+/// ajanlar birbirinin namespace hatasıyla bloklanmasın diye Stop hook'u oturumda değişen
+/// dosyalarla sınırlar.
+fn lint_errors(dir: &Path, only: Option<&BTreeSet<String>>) -> Vec<String> {
     match Graph::load(dir) {
-        Ok(g) => lint(&g)
-            .into_iter()
-            .filter(|d| d.level == Level::Error)
-            .map(|d| d.to_string())
-            .collect(),
+        Ok(g) => scoped_errors(lint(&g), only),
         Err(e) => vec![format!("{e:#}")],
     }
+}
+
+fn scoped_errors(
+    diags: Vec<duflow_core::lint::Diagnostic>,
+    only: Option<&BTreeSet<String>>,
+) -> Vec<String> {
+    diags
+        .into_iter()
+        .filter(|d| d.level == Level::Error)
+        .filter(|d| only.is_none_or(|set| set.contains(&d.file)))
+        .map(|d| d.to_string())
+        .collect()
+}
+
+/// Baseline'a göre değişen flows dosyaları (flows'a göreli yol).
+fn changed_flow_files(dir: &Path, base: &Baseline) -> BTreeSet<String> {
+    let now = flows_snapshot(dir);
+    let rel = |p: &str| {
+        Path::new(p)
+            .strip_prefix(dir)
+            .map(|r| r.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_else(|_| p.to_string())
+    };
+    let mut out = BTreeSet::new();
+    for (p, h) in &now {
+        if base.flows.get(p) != Some(h) {
+            out.insert(rel(p));
+        }
+    }
+    for p in base.flows.keys() {
+        if !now.contains_key(p) {
+            out.insert(rel(p));
+        }
+    }
+    out
 }
 
 fn rel_to_root(repo: &Repo, path: &str) -> String {
@@ -336,7 +370,7 @@ fn stop(dir: &Path, repo: &Repo, session: &str, input: &Value) -> Result<Option<
     };
     let (code, flows_changed) = drift(dir, repo, &base)?;
     let errors = if flows_changed {
-        lint_errors(dir)
+        lint_errors(dir, Some(&changed_flow_files(dir, &base)))
     } else {
         vec![]
     };
@@ -345,7 +379,7 @@ fn stop(dir: &Path, repo: &Repo, session: &str, input: &Value) -> Result<Option<
     }
     let mut reason = String::new();
     if !errors.is_empty() {
-        reason.push_str("`duflow validate` reports errors; fix them before stopping:\n");
+        reason.push_str("`duflow validate` reports errors in files you changed this session; fix them before stopping:\n");
         for e in errors.iter().take(20) {
             reason.push_str(&format!("  {e}\n"));
         }
@@ -379,7 +413,7 @@ fn pre_bash(dir: &Path, repo: &Repo, session: &str, input: &Value) -> Result<Opt
     if !is_git_commit(cmd) {
         return Ok(None);
     }
-    let errors = lint_errors(dir);
+    let errors = lint_errors(dir, None);
     if !errors.is_empty() {
         let reason = format!(
             "`duflow validate` has errors; fix them before committing:\n  {}",
@@ -438,6 +472,27 @@ mod tests {
         assert!(is_git_commit("cargo test && git commit -m x"));
         assert!(!is_git_commit("git status"));
         assert!(!is_git_commit("git log --oneline | grep commit"));
+    }
+
+    #[test]
+    fn stop_errors_are_scoped_to_changed_files() {
+        use duflow_core::lint::{Diagnostic, Level};
+        let d = |file: &str, level| Diagnostic {
+            level,
+            code: "x",
+            message: "m".into(),
+            file: file.into(),
+            line: 1,
+            id: None,
+        };
+        let diags = vec![
+            d("deploy.kdl", Level::Error),
+            d("edge/dns.kdl", Level::Error),
+            d("deploy.kdl", Level::Warning),
+        ];
+        let only: BTreeSet<String> = ["deploy.kdl".to_string()].into();
+        assert_eq!(scoped_errors(diags.clone(), Some(&only)).len(), 1);
+        assert_eq!(scoped_errors(diags, None).len(), 2);
     }
 
     #[test]
