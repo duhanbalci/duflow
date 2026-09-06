@@ -47,16 +47,22 @@ case ":$PATH:" in
   *) echo "note: $dir is not in PATH" ;;
 esac
 
-# Shell completion: `curl | sh` altında stdin script'in kendisi; soruyu /dev/tty'den oku
+# Sorular: `curl | sh` altında stdin script'in kendisi; /dev/tty'den oku, tty yoksa atla
+ask() { # ask "question" -> 0 yes
+  printf "%s [Y/n] " "$1" > /dev/tty
+  read -r ans < /dev/tty || ans=n
+  case "$ans" in ""|y|Y|yes) return 0 ;; *) return 1 ;; esac
+}
 shell=$(basename "${SHELL:-}")
 case "$shell" in fish|zsh|bash) ;; *) shell="" ;; esac
-if [ -n "$shell" ] && ( : < /dev/tty ) 2>/dev/null; then
-  printf "install %s completions? [Y/n] " "$shell" > /dev/tty
-  read -r ans < /dev/tty || ans=n
-  case "$ans" in
-    ""|y|Y|yes) "$dir/duflow" completions "$shell" ;;
-    *) echo "skipped; later: duflow completions $shell" ;;
-  esac
+if ( : < /dev/tty ) 2>/dev/null; then
+  if [ -n "$shell" ]; then
+    if ask "install $shell completions?"; then "$dir/duflow" completions "$shell"
+    else echo "skipped; later: duflow completions $shell"; fi
+  fi
+  if ask "install the duflow skill for AI agents (Claude Code, Codex, ...)?"; then "$dir/duflow" skill install
+  else echo "skipped; later: duflow skill install"; fi
 else
   echo "shell completion: duflow completions fish|zsh|bash"
+  echo "AI agent skill:   duflow skill install"
 fi

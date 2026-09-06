@@ -35,7 +35,12 @@ Or build from source: `cargo install --git https://github.com/duhanbalci/duflow 
 ```sh
 duflow self-update               # upgrade to the latest release (--check only reports)
 duflow completions fish|zsh|bash # shell autocomplete for node IDs, vars, layers, git revs
+duflow skill install [--project] # SKILL.md for AI agents: ~/.agents/skills + ~/.claude/skills
 ```
+
+The installer offers both. `--project` writes the skill into the repo (`.agents/skills/`, `.claude/skills/`)
+so teammates and CI agents get it; it follows the [Agent Skills](https://agentskills.io) format, which
+Claude Code, Codex, Cursor and others read.
 
 ## Usage
 

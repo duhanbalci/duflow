@@ -23,7 +23,7 @@ duflow/
 ├── docs/design.md       # spec
 ├── install.sh           # curl | sh kurulum; GitHub Release asset'ini indirir
 ├── .github/workflows/   # ci.yml (test), release.yml (v* tag → 4 hedef binary + GitHub Release)
-└── .claude/skills/duflow/SKILL.md   # AI için kullanım rehberi (format + CLI), İngilizce
+└── .claude/skills/duflow/SKILL.md   # AI için kullanım rehberi (format + CLI), İngilizce; binary'ye include_str ile gömülür (`duflow skill install`)
 ```
 
 ## Komutlar

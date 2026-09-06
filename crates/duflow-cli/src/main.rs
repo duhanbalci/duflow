@@ -141,6 +141,9 @@ enum Cmd {
         #[arg(long)]
         print: bool,
     },
+    /// AI agent skill (SKILL.md): install for Claude Code / Codex / .agents, or print
+    #[command(subcommand)]
+    Skill(SkillCmd),
     /// Update duflow to the latest GitHub release (--check only reports)
     SelfUpdate {
         /// Only check, do not install
@@ -152,6 +155,21 @@ enum Cmd {
 /// Release'lerin yayınlandığı GitHub deposu; asset adı `duflow-v<ver>-<target>.tar.gz`.
 const REPO_OWNER: &str = "duhanbalci";
 const REPO_NAME: &str = "duflow";
+
+#[derive(Subcommand)]
+enum SkillCmd {
+    /// Write SKILL.md to ~/.agents/skills and ~/.claude/skills (--project: ./.agents, ./.claude)
+    Install {
+        /// Into the current project instead of the home directory (commit it with the repo)
+        #[arg(long)]
+        project: bool,
+    },
+    /// Print SKILL.md to stdout
+    Print,
+}
+
+/// Binary'ye gömülü skill; kaynak repo'daki `.claude/skills/duflow/SKILL.md`
+const SKILL_MD: &str = include_str!("../../../.claude/skills/duflow/SKILL.md");
 
 #[derive(Subcommand)]
 enum UiCmd {
@@ -232,15 +250,21 @@ fn run() -> Result<()> {
     let cli = Cli::parse();
     let json = cli.json;
     // flows/ gerektirmeyen komutlar
-    if let Cmd::SelfUpdate { check } = cli.cmd {
-        return self_update(check);
+    match cli.cmd {
+        Cmd::SelfUpdate { check } => return self_update(check),
+        Cmd::Skill(SkillCmd::Print) => {
+            print!("{SKILL_MD}");
+            return Ok(());
+        }
+        Cmd::Skill(SkillCmd::Install { project }) => return skill_install(project),
+        _ => {}
     }
     let dir = match &cli.cmd {
         Cmd::Completions { .. } => PathBuf::new(),
         _ => find_dir(cli.dir.clone())?,
     };
     match cli.cmd {
-        Cmd::SelfUpdate { .. } => unreachable!(),
+        Cmd::SelfUpdate { .. } | Cmd::Skill(_) => unreachable!(),
         Cmd::Validate => {
             let g = Graph::load(&dir)?;
             let d = lint(&g);
@@ -763,6 +787,33 @@ fn self_update(check: bool) -> Result<()> {
         println!("updated duflow {current} -> {}", status.version());
     } else {
         println!("duflow {current} is up to date");
+    }
+    Ok(())
+}
+
+
+/// SKILL.md'yi agent skill dizinlerine yaz. `.agents/skills` ortak convention (Codex, Cursor,
+/// Cline...), `.claude/skills` Claude Code'un native yolu; ikisine de yazılır.
+fn skill_install(project: bool) -> Result<()> {
+    let base = if project {
+        std::env::current_dir()?
+    } else {
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .context("HOME not set")?
+    };
+    for d in [".agents/skills/duflow", ".claude/skills/duflow"] {
+        let dir = base.join(d);
+        std::fs::create_dir_all(&dir)?;
+        let f = dir.join("SKILL.md");
+        let same = std::fs::read_to_string(&f).is_ok_and(|s| s == SKILL_MD);
+        if !same {
+            std::fs::write(&f, SKILL_MD)?;
+        }
+        println!("{} {}", if same { "up to date" } else { "wrote" }, f.display());
+    }
+    if project {
+        println!("commit these so teammates and CI agents get the skill too");
     }
     Ok(())
 }

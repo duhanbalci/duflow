@@ -39,6 +39,7 @@ states, triggers, endpoints, checks, possible outcomes, variables. It changes in
 Shell autocomplete (node IDs, vars, layers, git revs): `duflow completions fish|zsh|bash` prints the one-liner to add.
 
 Install: `curl -fsSL https://raw.githubusercontent.com/duhanbalci/duflow/main/install.sh | sh`. Update: `duflow self-update`.
+This skill ships inside the binary: `duflow skill install [--project]` (re)writes it after an update.
 
 ## Format (KDL), cheatsheet
 
