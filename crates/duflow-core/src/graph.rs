@@ -256,6 +256,33 @@ impl Graph {
             .min_by_key(|p| p.len())
     }
 
+    /// Root'tan hedefe gelen farklı yollar: hedefin her öncülü için root'tan en kısa yol + son adım.
+    /// Böylece hedefe giren her kenar en az bir yolla temsil edilir. Kısadan uzuna, en fazla `max`.
+    pub fn paths_from_roots(&self, to: &str, max: usize) -> Vec<Vec<String>> {
+        let mut out: Vec<Vec<String>> = vec![];
+        if let Some(p) = self.path_from_roots(to) {
+            out.push(p);
+        }
+        for e in self.incoming_edges(to) {
+            if e.from == to {
+                continue;
+            }
+            let Some(mut p) = self.path_from_roots(&e.from) else {
+                continue;
+            };
+            if p.contains(&to.to_string()) {
+                continue;
+            }
+            p.push(to.to_string());
+            if !out.contains(&p) {
+                out.push(p);
+            }
+        }
+        out.sort_by_key(|p| p.len());
+        out.truncate(max);
+        out
+    }
+
     /// İki node arası en fazla `max` basit yol (DFS, uzunluk sınırı `depth`).
     pub fn all_paths(&self, from: &str, to: &str, max: usize, depth: usize) -> Vec<Vec<String>> {
         let mut res = vec![];

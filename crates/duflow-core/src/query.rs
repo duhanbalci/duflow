@@ -9,8 +9,8 @@ use std::collections::{BTreeSet, VecDeque};
 #[derive(Debug, Serialize)]
 pub struct Brief {
     pub node: Node,
-    /// Root'tan en kısa yol (varsa)
-    pub path_from_root: Option<Vec<String>>,
+    /// Root'tan gelen farklı yollar, kısadan uzuna (her gelen kenar temsil edilir; boşsa erişilemiyor)
+    pub paths_from_root: Vec<Vec<String>>,
     pub incoming: Vec<ResolvedEdge>,
     pub outgoing: Vec<ResolvedEdge>,
     pub reads: Vec<String>,
@@ -43,7 +43,7 @@ pub fn brief(g: &Graph, id: &str) -> Option<Brief> {
         .cloned()
         .collect();
     Some(Brief {
-        path_from_root: g.path_from_roots(id),
+        paths_from_root: g.paths_from_roots(id, 3),
         incoming: g.incoming_edges(id).into_iter().cloned().collect(),
         outgoing: g.outgoing(id).to_vec(),
         reads: reads.into_iter().collect(),
@@ -67,14 +67,27 @@ impl Brief {
         for (k, v) in &n.attrs {
             s.push_str(&format!("- {k}: {v}\n"));
         }
-        if let Some(p) = &self.path_from_root {
-            s.push_str(&format!(
-                "\n## How to get here ({} steps)\n{}\n",
-                p.len() - 1,
-                p.join(" → ")
-            ));
+        if self.paths_from_root.is_empty() {
+            s.push_str(
+                "
+## How to get here
+(not reachable from a root)
+",
+            );
         } else {
-            s.push_str("\n## How to get here\n(not reachable from a root)\n");
+            s.push_str(
+                "
+## How to get here
+",
+            );
+            for p in &self.paths_from_root {
+                s.push_str(&format!(
+                    "- {} steps: {}
+",
+                    p.len() - 1,
+                    p.join(" → ")
+                ));
+            }
         }
         if !self.incoming.is_empty() {
             s.push_str("\n## Incoming\n");

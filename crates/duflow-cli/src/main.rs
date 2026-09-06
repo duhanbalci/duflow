@@ -134,10 +134,12 @@ enum Cmd {
     /// UI
     #[command(subcommand)]
     Ui(UiCmd),
-    /// Print shell setup for autocomplete (fish | zsh | bash)
+    /// Install shell autocomplete (fish | zsh | bash); --print only shows the line
     Completions {
         #[arg(value_parser = ["fish", "zsh", "bash"])]
         shell: String,
+        #[arg(long)]
+        print: bool,
     },
 }
 
@@ -498,18 +500,41 @@ fn run() -> Result<()> {
             eprintln!("wrote {} ({} nodes)", out.display(), g.nodes.len());
         }
         Cmd::Ui(UiCmd::Serve { addr }) => ui::serve(&dir, &addr)?,
-        Cmd::Completions { shell } => {
-            let line = match shell.as_str() {
-                "fish" => "COMPLETE=fish duflow | source",
-                "zsh" => "source <(COMPLETE=zsh duflow)",
-                _ => "source <(COMPLETE=bash duflow)",
+        Cmd::Completions { shell, print } => {
+            let home = std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .context("HOME not set")?;
+            let (line, file) = match shell.as_str() {
+                "fish" => (
+                    "COMPLETE=fish duflow | source",
+                    home.join(".config/fish/completions/duflow.fish"),
+                ),
+                "zsh" => ("source <(COMPLETE=zsh duflow)", home.join(".zshrc")),
+                _ => ("source <(COMPLETE=bash duflow)", home.join(".bashrc")),
             };
-            let file = match shell.as_str() {
-                "fish" => "~/.config/fish/completions/duflow.fish",
-                "zsh" => "~/.zshrc",
-                _ => "~/.bashrc",
-            };
-            println!("# add to {file}:\n{line}");
+            if print {
+                println!("# add to {}:\n{line}", file.display());
+                return Ok(());
+            }
+            let existing = std::fs::read_to_string(&file).unwrap_or_default();
+            if existing.lines().any(|l| l.trim() == line) {
+                println!("already installed in {}", file.display());
+            } else if shell == "fish" {
+                std::fs::create_dir_all(file.parent().unwrap())?;
+                std::fs::write(&file, format!("{line}\n"))?;
+                println!("wrote {}", file.display());
+            } else {
+                let sep = if existing.is_empty() || existing.ends_with('\n') {
+                    ""
+                } else {
+                    "\n"
+                };
+                std::fs::write(
+                    &file,
+                    format!("{existing}{sep}\n# duflow autocomplete\n{line}\n"),
+                )?;
+                println!("appended to {} (open a new shell)", file.display());
+            }
         }
     }
     Ok(())
