@@ -629,7 +629,7 @@ pub fn src_lint(g: &Graph, repo_root: &std::path::Path) -> Vec<Diagnostic> {
             continue;
         };
         match symbol {
-            Some(sym) if !contains_word(&text, sym) => d.push(Diagnostic {
+            Some(sym) if !contains_symbol(&text, sym) => d.push(Diagnostic {
                 level: Level::Warning,
                 code: "src_symbol_missing",
                 message: format!("`{}`: `{sym}` not found in `{path}`", n.id),
@@ -659,6 +659,19 @@ pub fn src_lint(g: &Graph, repo_root: &std::path::Path) -> Vec<Diagnostic> {
         }
     }
     d
+}
+
+/// `Runner::start`, `Store.save`, `Foo#bar` gibi nitelenmiş sembol: tam hali yoksa her parça
+/// ayrı ayrı tam kelime olarak geçmeli (impl içi metodlar kaynakta `Runner::start` diye yazılmaz).
+fn contains_symbol(text: &str, sym: &str) -> bool {
+    if contains_word(text, sym) {
+        return true;
+    }
+    let parts: Vec<&str> = sym
+        .split(|c| c == ':' || c == '.' || c == '#')
+        .filter(|p| !p.is_empty())
+        .collect();
+    parts.len() > 1 && parts.iter().all(|p| contains_word(text, p))
 }
 
 /// `word` metinde tam kelime olarak (tanımlayıcı karakterleriyle çevrili değil) geçiyor mu.
@@ -984,12 +997,16 @@ state "a.start" desc="s" { -> "a.mid" }
     fn src_attr_is_checked_against_the_repo() {
         let dir = std::env::temp_dir().join(format!("duflow-src-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("src")).unwrap();
-        std::fs::write(dir.join("src/api.rs"), "pub fn create_instance() {}\n").unwrap();
+        std::fs::write(
+            dir.join("src/api.rs"),
+            "pub fn create_instance() {}\nimpl Runner {\n  pub fn start(self: &Arc<Self>) {}\n}\n",
+        )
+        .unwrap();
         std::fs::write(dir.join("src/View.vue"), "<script setup lang=\"ts\">\nasync function submit() {}\n</script>\n").unwrap();
         let g = mk(&[(
             "a.kdl",
             &format!(
-                "{BASE}\nstate \"a.mid\" desc=\"m\" src=\"src/api.rs#create_instance\"\nstate \"a.x\" desc=\"x\" src=\"src/api.rs#gone\"\nstate \"a.y\" desc=\"y\" src=\"src/nope.rs\"\nstate \"a.z\" desc=\"z\" src=\"src/api.rs:1\"\nstate \"a.w\" desc=\"w\" src=\"src/api.rs#create\"\nstate \"a.v\" desc=\"v\" src=\"src/View.vue#submit\"\nstate \"a.u\" desc=\"u\" src=\"src/View.vue\"\n"
+                "{BASE}\nstate \"a.mid\" desc=\"m\" src=\"src/api.rs#create_instance\"\nstate \"a.x\" desc=\"x\" src=\"src/api.rs#gone\"\nstate \"a.y\" desc=\"y\" src=\"src/nope.rs\"\nstate \"a.z\" desc=\"z\" src=\"src/api.rs:1\"\nstate \"a.w\" desc=\"w\" src=\"src/api.rs#create\"\nstate \"a.v\" desc=\"v\" src=\"src/View.vue#submit\"\nstate \"a.u\" desc=\"u\" src=\"src/View.vue\"\nstate \"a.t\" desc=\"t\" src=\"src/api.rs#Runner::start\"\nstate \"a.s\" desc=\"s\" src=\"src/api.rs#Runner::stop\"\n"
             ),
         )]);
         let d = src_lint(&g, &dir);
@@ -1007,6 +1024,9 @@ state "a.start" desc="s" { -> "a.mid" }
         assert_eq!(by_id("a.v"), None);
         // kod dosyası, sembol/satır yok → uyar (sessiz geçme)
         assert_eq!(by_id("a.u"), Some("src_symbol_unchecked"));
+        // impl içi metod: `Runner::start` literal yok, parçalar var → geçer; `stop` yok → uyarı
+        assert_eq!(by_id("a.t"), None);
+        assert_eq!(by_id("a.s"), Some("src_symbol_missing"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

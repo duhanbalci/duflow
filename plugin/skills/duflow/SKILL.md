@@ -117,7 +117,7 @@ Rules:
 - Permissions: define `perm`, use `requires`. Don't write `check "perm:x"` by hand.
 - Reconcilers and periodic loops are `root ... every="..."`, not edges from a boot state. Periodic roots don't count toward `max_roots` (set in `flow.kdl`).
 - Only state-changing things go in; spinners/cosmetics don't. Everything that must be checked is a `check`.
-- `desc` is one line, in the project's language. Code/IDs are English. `src="path#symbol"` links the node to code; `validate` checks the file and the symbol as a whole word (any language, incl. `.vue`/`.ts`). A code file without `#symbol` or `:line` warns `src_symbol_unchecked`.
+- `desc` is one line, in the project's language. Code/IDs are English. `src="path#symbol"` links the node to code; `validate` checks the file and the symbol as a whole word (any language, incl. `.vue`/`.ts`; `Type::method` matches when both parts appear). A code file without `#symbol` or `:line` warns `src_symbol_unchecked`.
 - Don't invent roots: a node with incoming edges is not an entry point (`root_has_incoming`).
 
 ## Common lint errors
