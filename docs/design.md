@@ -62,6 +62,18 @@ kod doğrulaması (OpenAPI/route cross-check) v2 eklentisi olarak açık bırak�
 `layer` attr'ı: `ui | api | domain` çekirdekte tanımlı; proje `flow.kdl`'de ek katman
 tanımlayabilir. UI'daki katman toggle'ı bu attr'ı filtreler.
 
+### 3.3.1 Proje ayarı (`flow.kdl`)
+
+```kdl
+project "duploy" {
+  layers "ui" "api" "domain"
+  watch "dorch/src/api/**" "dorch/src/deploy/**"   // grafı etkileyebilecek kaynak glob'ları (repo köküne göre)
+}
+```
+
+`watch` çekirdek sorgularda kullanılmaz; editor hook'ları (§6.1) bu dosyalar değişince `flows/`
+güncellenmiş mi diye bakar. Dar tut: geniş glob "gerek yok" demeyi öğretir, sonra gerçek drift kaçar.
+
 ### 3.4 Kenarlar
 
 Kenar node'un içinde inline yazılır, ayrı varlık değil:
@@ -180,6 +192,24 @@ Rust, `clap`, `kdl-rs`, `petgraph`. Tüm komutlar `--json` alır. Exit code: 0 o
 
 Token verimliliği: `brief` çıktısı derinlik 1'de ~30-60 satır hedefler. AI dosyayı okumaz,
 brief alır; derinleşmek için `prereq`/`path`.
+
+### 6.1 Claude Code plugin'i ve hook'lar
+
+Skill tek başına hatırlatmadır; model alışır, es geçer. Plugin (`plugin/`, marketplace bu repo)
+skill'in yanına deterministik kapılar koyar, mantık `duflow hook <event>` içinde:
+
+| Hook | İş |
+|---|---|
+| SessionStart | Baseline: HEAD, kirli dosyaların blob hash'i, `flows/*.kdl` içerik hash'i. Modele proje bağlamı + `watch` listesi. |
+| PostToolUse (Edit/Write) | Dosya `watch` glob'unda ise dosya başına bir kez hedefli hatırlatma (ekranda görünmez, modele context). |
+| Stop | Oturumda `watch` dosyası değişmiş ama `flows/` değişmemişse ya da lint hatası varsa `decision: block`; model ya grafı günceller ya tek cümle "etkilenmedi" der. `stop_hook_active` ikinci gelişte geçirir. |
+| PreToolUse (`git commit`) | Lint hatası → `deny`. Drift → sadece uyarı (kod ve flows ayrı commit olabilir). |
+
+`flows/` yoksa, `duflow` PATH'te yoksa ya da baseline yoksa hook sessiz; plugin global kurulunca
+alakasız repoyu rahatsız etmez. CI'daki `duflow validate` son tampon.
+
+Skill dosyası Claude'a özel değil (agent-skills standardı); Claude dışı ajanlar için binary'ye
+gömülü kalır (`duflow skill install`).
 
 ## 7. UI
 

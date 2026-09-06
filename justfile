@@ -40,9 +40,10 @@ release version:
     v="{{version}}"; v="${v#v}"
     [ -z "$(git status --porcelain)" ] || { echo "working tree dirty" >&2; exit 1; }
     sed -i '' "s/^version = \".*\"/version = \"$v\"/" Cargo.toml
+    sed -i '' "s/\"version\": \".*\"/\"version\": \"$v\"/" plugin/.claude-plugin/plugin.json .claude-plugin/marketplace.json
     cargo update -w -q
     cargo build -q -p duflow-cli
-    git add Cargo.toml Cargo.lock
+    git add Cargo.toml Cargo.lock plugin/.claude-plugin/plugin.json .claude-plugin/marketplace.json
     git commit -qm "chore: release v$v"
     git tag "v$v"
     git push origin main "v$v"

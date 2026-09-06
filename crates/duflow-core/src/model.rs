@@ -205,6 +205,9 @@ pub struct ViewDef {
 pub struct ProjectConfig {
     pub name: String,
     pub layers: Vec<String>,
+    /// Grafı etkileyebilecek kaynak dosya glob'ları (repo köküne göre). Editor hook'ları
+    /// bu dosyalar değişince `flows/` güncellenmiş mi diye bakar.
+    pub watch: Vec<String>,
 }
 
 impl Default for ProjectConfig {
@@ -212,6 +215,7 @@ impl Default for ProjectConfig {
         Self {
             name: "flows".into(),
             layers: vec!["ui".into(), "api".into(), "domain".into()],
+            watch: vec![],
         }
     }
 }

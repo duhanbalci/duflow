@@ -1,0 +1,9 @@
+{
+  "name": "duflow",
+  "description": "System flow graph (flows/*.kdl): skill for querying/editing it via the duflow CLI, plus hooks that keep the graph in sync with the code",
+  "version": "0.2.0",
+  "author": { "name": "Duhan BALCI", "url": "https://github.com/duhanbalci" },
+  "repository": "https://github.com/duhanbalci/duflow",
+  "license": "MIT",
+  "keywords": ["flow", "graph", "kdl", "architecture"]
+}

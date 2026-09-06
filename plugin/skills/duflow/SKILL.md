@@ -39,7 +39,23 @@ states, triggers, endpoints, checks, possible outcomes, variables. It changes in
 Shell autocomplete (node IDs, vars, layers, git revs): `duflow completions fish|zsh|bash` prints the one-liner to add.
 
 Install: `curl -fsSL https://raw.githubusercontent.com/duhanbalci/duflow/main/install.sh | sh`. Update: `duflow self-update`.
-This skill ships inside the binary: `duflow skill install [--project]` (re)writes it after an update.
+Claude Code: `claude plugin marketplace add duhanbalci/duflow && claude plugin install duflow@duflow` (this skill + hooks).
+Other agents (Codex, Cursor, ...): `duflow skill install [--project]` writes this file from the binary.
+
+## Keeping the graph in sync (plugin hooks)
+
+`flows/flow.kdl` can list source globs whose changes usually affect the graph:
+
+```kdl
+project "duploy" {
+  layers "ui" "api" "domain"
+  watch "dorch/src/api/**" "dorch/src/deploy/**" "dorch/ui/src/views/**"
+}
+```
+
+With the plugin installed, editing a watched file adds a one-time reminder; trying to stop (or `git commit`)
+after changing watched files without touching `flows/` is blocked until the graph is updated or you state in
+one sentence why it is unaffected. Lint errors in `flows/` block stopping and committing.
 
 ## Format (KDL), cheatsheet
 

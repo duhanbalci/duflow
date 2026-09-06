@@ -16,6 +16,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod hook;
 mod ui;
 
 #[derive(Parser)]
@@ -144,6 +145,12 @@ enum Cmd {
     /// AI agent skill (SKILL.md): install for Claude Code / Codex / .agents, or print
     #[command(subcommand)]
     Skill(SkillCmd),
+    /// Claude Code hook entry point (used by the duflow plugin; reads hook JSON on stdin)
+    #[command(hide = true)]
+    Hook {
+        #[arg(value_enum)]
+        event: hook::Event,
+    },
     /// Update duflow to the latest GitHub release (--check only reports)
     SelfUpdate {
         /// Only check, do not install
@@ -168,8 +175,8 @@ enum SkillCmd {
     Print,
 }
 
-/// Binary'ye gömülü skill; kaynak repo'daki `.claude/skills/duflow/SKILL.md`
-const SKILL_MD: &str = include_str!("../../../.claude/skills/duflow/SKILL.md");
+/// Binary'ye gömülü skill; kaynak repo'daki `plugin/skills/duflow/SKILL.md`
+const SKILL_MD: &str = include_str!("../../../plugin/skills/duflow/SKILL.md");
 
 #[derive(Subcommand)]
 enum UiCmd {
@@ -257,6 +264,7 @@ fn run() -> Result<()> {
             return Ok(());
         }
         Cmd::Skill(SkillCmd::Install { project }) => return skill_install(project),
+        Cmd::Hook { event } => return hook::run(event, cli.dir.clone()),
         _ => {}
     }
     let dir = match &cli.cmd {
@@ -264,7 +272,7 @@ fn run() -> Result<()> {
         _ => find_dir(cli.dir.clone())?,
     };
     match cli.cmd {
-        Cmd::SelfUpdate { .. } | Cmd::Skill(_) => unreachable!(),
+        Cmd::SelfUpdate { .. } | Cmd::Skill(_) | Cmd::Hook { .. } => unreachable!(),
         Cmd::Validate => {
             let g = Graph::load(&dir)?;
             let d = lint(&g);
@@ -791,7 +799,6 @@ fn self_update(check: bool) -> Result<()> {
     Ok(())
 }
 
-
 /// SKILL.md'yi agent skill dizinlerine yaz. `.agents/skills` ortak convention (Codex, Cursor,
 /// Cline...), `.claude/skills` Claude Code'un native yolu; ikisine de yazılır.
 fn skill_install(project: bool) -> Result<()> {
@@ -810,10 +817,18 @@ fn skill_install(project: bool) -> Result<()> {
         if !same {
             std::fs::write(&f, SKILL_MD)?;
         }
-        println!("{} {}", if same { "up to date" } else { "wrote" }, f.display());
+        println!(
+            "{} {}",
+            if same { "up to date" } else { "wrote" },
+            f.display()
+        );
     }
     if project {
         println!("commit these so teammates and CI agents get the skill too");
     }
+    println!("Claude Code users: prefer the plugin (skill + sync hooks):");
+    println!(
+        "  claude plugin marketplace add {REPO_OWNER}/{REPO_NAME} && claude plugin install duflow@duflow"
+    );
     Ok(())
 }

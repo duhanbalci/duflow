@@ -144,6 +144,16 @@ pub fn parse_file(file: &str, src: &str) -> Result<FileItems, ParseError> {
                 if let Some(l) = node.children().and_then(|c| c.get("layers")) {
                     cfg.layers = args(l).iter().map(|v| val_str(v)).collect();
                 }
+                // `watch "a/**" "b/**"` ya da birden çok `watch` satırı
+                for w in node
+                    .children()
+                    .map(|c| c.nodes())
+                    .unwrap_or_default()
+                    .iter()
+                    .filter(|n| n.name().value() == "watch")
+                {
+                    cfg.watch.extend(args(w).iter().map(|v| val_str(v)));
+                }
                 items.config = Some(cfg);
             }
             other => return Err(cx.err(node, format!("unknown top-level node `{other}`"))),
@@ -392,5 +402,28 @@ view "v" from="ui.login" to="deploy.done"
         assert_eq!(it.roots[0].id, "ui.login");
         assert_eq!(it.views[0].to, "deploy.done");
         assert_eq!(retry.line, 2);
+    }
+
+    #[test]
+    fn parses_project_config() {
+        let src = r#"
+project "duploy" {
+  layers "ui" "api" "domain" "infra"
+  watch "dorch/src/api/**" "dorch/src/deploy/**"
+  watch "dorch/ui/src/views/**"
+}
+"#;
+        let it = parse_file("flow.kdl", src).unwrap();
+        let cfg = it.config.unwrap();
+        assert_eq!(cfg.name, "duploy");
+        assert_eq!(cfg.layers.len(), 4);
+        assert_eq!(
+            cfg.watch,
+            vec![
+                "dorch/src/api/**",
+                "dorch/src/deploy/**",
+                "dorch/ui/src/views/**"
+            ]
+        );
     }
 }

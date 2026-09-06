@@ -16,14 +16,17 @@ Tasarım kararları ve gerekçeler: `docs/design.md` (spec). Bu dosya yalnız ç
 ```
 duflow/
 ├── crates/duflow-core   # model, KDL parse (kdl 6), Graph + indeks, lint, query (brief/prereq/path/search), diff, edit (format-preserving write-back), export (UI JSON şeması v1)
-├── crates/duflow-cli    # `duflow` binary'si (clap); ui.rs: ui-dist/index.html'i include_str ile gömer, `/*DUFLOW_DATA*/null/*END*/` yerine JSON basar
+├── crates/duflow-cli    # `duflow` binary'si (clap); ui.rs: ui-dist/index.html'i include_str ile gömer, `/*DUFLOW_DATA*/null/*END*/` yerine JSON basar; hook.rs: Claude Code hook'ları (`duflow hook <event>`)
 │   └── ui-dist/index.html   # `bun run build` çıktısı (vite-plugin-singlefile). Derlenmiş; commit'lenir ki cargo build UI'sız da çalışsın
 ├── ui/                  # Vue 3 + Vite + TS. src/graph.ts (veri + saf sorgular), src/walk.ts (store), components/{TopBar,Walk,Card,SidePanel,MapView}.vue
 │   └── public/duflow.json   # dev'de yüklenen örnek export (`duflow export > ui/public/duflow.json`)
 ├── docs/design.md       # spec
 ├── install.sh           # curl | sh kurulum; GitHub Release asset'ini indirir
 ├── .github/workflows/   # ci.yml (test), release.yml (v* tag → 4 hedef binary + GitHub Release)
-└── .claude/skills/duflow/SKILL.md   # AI için kullanım rehberi (format + CLI), İngilizce; binary'ye include_str ile gömülür (`duflow skill install`)
+├── plugin/              # Claude Code plugin'i: .claude-plugin/plugin.json, skills/duflow/SKILL.md, hooks/hooks.json, scripts/hook.sh
+│   └── skills/duflow/SKILL.md   # AI için kullanım rehberi (format + CLI), İngilizce; binary'ye include_str ile gömülür (`duflow skill install`, Claude dışı ajanlar için)
+├── .claude-plugin/marketplace.json   # `claude plugin marketplace add duhanbalci/duflow` → source ./plugin
+└── .claude/skills/duflow → ../../plugin/skills/duflow (symlink; bu repoda çalışırken skill aktif)
 ```
 
 ## Komutlar
@@ -51,4 +54,6 @@ Repo: github.com/duhanbalci/duflow (public). Release asset adı `duflow-v<ver>-<
 - UI Walk = **konveyör**: 5 eşit slot `[gizli-sol][geçmiş][şimdi][adaylar][ufuk/gelen]`, bant tek `translateX` ile kayar; ileri: seçilenin devamı sağ slota statik çizilir → kay → `go()` → bant sıfırlanır (görüntü aynı). Kart bazlı FLIP yok, animasyon sırasında ölçüm/çizim yok. Hover **yerel** (Walk.vue), store'a koyma; teller ve etiketler bant içindeki tek SVG'de; slot (`overflow:auto`) dışına taşan hiçbir şey kartta olmasın.
 - Export şeması değişirse `export.rs::SCHEMA_VERSION` ve `ui/src/graph.ts` tipleri birlikte.
 - Commit mesajları kısa, Conventional Commits, attribution yok.
+- Hook'lar (`hook.rs`): SessionStart baseline yazar (`$TMPDIR/duflow-hook/<session>.json`: HEAD, kirli dosya hash'leri, flows/ hash'leri), PostToolUse `watch` glob'una uyan dosyada tek seferlik hatırlatma, Stop drift/lint varsa `decision: block`, PreToolUse `git commit` lint hatasında `deny`. Baseline yoksa sessiz. `flows/` gitignore'lu olsa da hash ile izlenir.
+- Plugin sürümü `plugin.json` + `marketplace.json`'da; `just release` ikisini de bump'lar.
 - Autocomplete `clap_complete` dynamic (`unstable-dynamic`): `CompleteEnv` main'in başında, ID argümanları `ArgValueCompleter` ile grafı o an yükler (`-d` görülmez; cwd ya da `DUFLOW_DIR`). Kurulum satırı `duflow completions <shell>`.

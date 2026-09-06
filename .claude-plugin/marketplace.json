@@ -1,0 +1,13 @@
+{
+  "name": "duflow",
+  "description": "duflow: system flow graph tooling (skill + sync hooks)",
+  "owner": { "name": "Duhan BALCI" },
+  "plugins": [
+    {
+      "name": "duflow",
+      "description": "System flow graph skill + hooks that keep flows/ in sync with the code",
+      "source": "./plugin",
+      "version": "0.2.0"
+    }
+  ]
+}
