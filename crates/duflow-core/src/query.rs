@@ -401,7 +401,7 @@ mod tests {
 
     fn mk() -> Graph {
         Graph::from_sources(&[
-            ("a.kdl".into(), "root \"a.start\"\nstate \"a.start\" desc=\"s\" { -> \"a.mid\" }\nstate \"a.mid\" desc=\"m\" {\n  sets \"retry\" \"+1\"\n  -> \"a.end\" when=\"retry > 2\"\n  -> \"a.start\" case=\"again\"\n}\ncall \"a.end\" desc=\"e\" {\n  requires \"x\"\n  returns 500 outcome=\"toast: boom\"\n  returns 200 -> \"a.start\"\n}\nperm \"x\" deny=403 -> \"a.start\"\n".into()),
+            ("a.kdl".into(), "root \"a.start\"\nstate \"a.start\" desc=\"s\" { -> \"a.mid\" }\nstate \"a.mid\" desc=\"m\" {\n  sets \"retry\" \"+1\"\n  -> \"a.end\" when=\"retry > 2\"\n  -> \"a.start\" case=\"again\"\n}\ncall \"a.end\" desc=\"e\" {\n  requires \"x\" outcome=\"toast: denied\"\n  returns 500 outcome=\"toast: boom\"\n  returns 200 -> \"a.start\"\n}\nperm \"x\" deny=403 -> \"a.start\"\n".into()),
         ])
         .unwrap()
     }
@@ -416,6 +416,7 @@ mod tests {
         assert!(md.contains("Root: a.start (2 steps)"), "{md}");
         assert!(md.contains("requires x"), "{md}");
         assert!(md.contains("500") && md.contains("toast: boom"), "{md}");
+        assert!(md.contains("requires x ✗ 403 ⇥ toast: denied"), "{md}");
         let m = brief(&g, "a.mid").unwrap().to_markdown(&g);
         assert!(m.contains("reads retry (local)"), "{m}");
         assert!(m.contains("case again"), "{m}");

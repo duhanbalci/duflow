@@ -46,6 +46,9 @@ enum Cmd {
         /// Table of code × namespace instead of the flat list
         #[arg(long)]
         summary: bool,
+        /// Namespace depth for --summary columns (1 = first ID segment)
+        #[arg(long, default_value_t = 1)]
+        depth: usize,
         /// Skip the `src=` attribute check against the repository
         #[arg(long)]
         no_src: bool,
@@ -95,7 +98,7 @@ enum Cmd {
         #[arg(long, default_value_t = 15)]
         limit: usize,
     },
-    /// List nodes (filters: --kind, --layer, --prefix; --prefix repeatable)
+    /// List nodes (filters: --kind, --layer, --prefix, --attr, --no-attr; all repeatable except kind/layer)
     Ls {
         #[arg(long, value_parser = ["state", "action", "call", "event"])]
         kind: Option<String>,
@@ -103,12 +106,19 @@ enum Cmd {
         layer: Option<String>,
         #[arg(long, add = ArgValueCompleter::new(complete_node))]
         prefix: Vec<String>,
+        /// Only nodes that have this attribute (`method`, or `method=POST`)
+        #[arg(long = "attr")]
+        with_attr: Vec<String>,
+        /// Only nodes that lack this attribute (e.g. `--kind call --no-attr method` finds fake calls)
+        #[arg(long = "no-attr")]
+        without_attr: Vec<String>,
     },
     /// Permissions: list all, or who requires one (`duflow perm deploy.trigger`)
     Perm { id: Option<String> },
     /// New node or definition: duflow add state deploy.done --layer domain --desc "..." --child '-> "x"'
     Add(AddArgs),
-    /// Edit a node or definition: --set key=value, --kind call, --child '<kdl line>', --rm-edge <target>, --rm-child name:arg
+    /// Edit a node or definition. Removals (--rm-edge, --rm-child) run BEFORE additions (--kind, --set, --child),
+    /// so "delete edge, re-add with case=" works in one command
     Edit(EditArgs),
     /// Rename an ID (all references + file move)
     Rename {
@@ -135,12 +145,16 @@ enum Cmd {
         #[arg(long)]
         continue_on_error: bool,
     },
-    /// Graph diff between two git revs (working tree if rev2 omitted)
+    /// Graph diff between two git revs or flows directories (working tree if the second is omitted)
     Diff {
+        /// Git rev, or a path to a flows directory (works when flows/ is gitignored: copy it first)
         #[arg(add = ArgValueCompleter::new(complete_rev))]
         rev1: String,
         #[arg(add = ArgValueCompleter::new(complete_rev))]
         rev2: Option<String>,
+        /// Counts only: nodes/edges added/removed per namespace
+        #[arg(long)]
+        stat: bool,
     },
     /// Print the graph in the UI JSON schema
     Export {
@@ -295,6 +309,7 @@ fn run() -> Result<()> {
         Cmd::Validate {
             prefix,
             summary,
+            depth,
             no_src,
         } => {
             let g = Graph::load(&dir)?;
@@ -315,17 +330,19 @@ fn run() -> Result<()> {
             if json {
                 println!("{}", serde_json::to_string_pretty(&d)?);
             } else if summary {
-                print!("{}", lint_summary(&d));
+                print!("{}", lint_summary(&d, depth.max(1)));
                 println!("{e} errors, {w} warnings");
             } else {
                 for x in &d {
                     println!("{x}");
                 }
                 println!(
-                    "{} nodes, {} vars, {} checks · {e} errors, {w} warnings",
+                    "{} nodes, {} vars, {} checks, {} perms, {} roots · {e} errors, {w} warnings",
                     g.nodes.len(),
                     g.vars.len(),
-                    g.checks.len()
+                    g.checks.len(),
+                    g.perms.len(),
+                    g.roots.len()
                 );
             }
             if e > 0 {
@@ -376,10 +393,11 @@ fn run() -> Result<()> {
                     } else {
                         for p in g.perms.values() {
                             println!(
-                                "{:<24} {:<8} {:<4} {:>2} uses  {}",
+                                "{:<24} {:<8} {:<4} {:<20} {:>2} uses  {}",
                                 p.id,
                                 p.scope.as_deref().unwrap_or("-"),
                                 p.deny.map(|d| d.to_string()).unwrap_or_else(|| "-".into()),
+                                p.fail_to.as_deref().unwrap_or("-"),
                                 g.perm_users(&p.id).len(),
                                 p.desc.clone().unwrap_or_default()
                             );
@@ -514,6 +532,8 @@ fn run() -> Result<()> {
             kind,
             layer,
             prefix,
+            with_attr,
+            without_attr,
         } => {
             let g = Graph::load(&dir)?;
             let list: Vec<_> = g
@@ -524,6 +544,8 @@ fn run() -> Result<()> {
                 .filter(|n| {
                     prefix.is_empty() || prefix.iter().any(|p| n.id.starts_with(p.as_str()))
                 })
+                .filter(|n| with_attr.iter().all(|a| attr_matches(n, a)))
+                .filter(|n| !without_attr.iter().any(|a| attr_matches(n, a)))
                 .collect();
             if json {
                 println!("{}", serde_json::to_string_pretty(&list)?);
@@ -568,48 +590,7 @@ fn run() -> Result<()> {
             apply_ops(&dir, &[op], false, json)?;
         }
         Cmd::Edit(e) => {
-            let mut ops = vec![];
-            if let Some(kind) = e.kind {
-                ops.push(Op::SetKind {
-                    id: e.id.clone(),
-                    kind,
-                });
-            }
-            for kv in e.sets {
-                let (k, v) = kv
-                    .split_once('=')
-                    .with_context(|| format!("--set `{kv}`: expected key=value"))?;
-                ops.push(Op::SetAttr {
-                    id: e.id.clone(),
-                    key: k.into(),
-                    value: v.into(),
-                });
-            }
-            for c in e.children {
-                ops.push(Op::AddChild {
-                    id: e.id.clone(),
-                    line: c,
-                });
-            }
-            for t in e.rm_edges {
-                ops.push(Op::RmEdge {
-                    id: e.id.clone(),
-                    to: t,
-                });
-            }
-            for rc in e.rm_children {
-                let (name, arg) = rc
-                    .split_once(':')
-                    .with_context(|| format!("--rm-child `{rc}`: expected name:arg"))?;
-                ops.push(Op::RmChild {
-                    id: e.id.clone(),
-                    name: name.into(),
-                    arg: arg.into(),
-                });
-            }
-            if ops.is_empty() {
-                bail!("no operations given");
-            }
+            let ops = edit_ops(e)?;
             apply_ops(&dir, &ops, false, json)?;
         }
         Cmd::Rename { from, to } => apply_ops(&dir, &[Op::Rename { from, to }], false, json)?,
@@ -630,14 +611,21 @@ fn run() -> Result<()> {
                 serde_json::from_str(&src).context("could not parse JSON op list")?;
             apply_ops_ext(&dir, &ops, dry_run, continue_on_error, json)?;
         }
-        Cmd::Diff { rev1, rev2 } => {
-            let a = graph_at(&dir, &rev1)?;
+        Cmd::Diff { rev1, rev2, stat } => {
+            let a = graph_at_or_dir(&dir, &rev1)?;
             let b = match rev2 {
-                Some(r) => graph_at(&dir, &r)?,
+                Some(r) => graph_at_or_dir(&dir, &r)?,
                 None => Graph::load(&dir)?,
             };
             let d = diff(&a, &b);
-            if json {
+            if stat {
+                let st = d.stat();
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&st)?);
+                } else {
+                    print!("{}", st.to_text());
+                }
+            } else if json {
                 println!("{}", serde_json::to_string_pretty(&d)?);
             } else {
                 print!("{}", d.to_text());
@@ -694,6 +682,71 @@ fn run() -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// `duflow edit` argümanları → op listesi. Silmeler eklemelerden ÖNCE: aynı komutta
+/// "kenarı sil, case= ile geri ekle" yapılabilsin (aksi halde ekleme siliniyordu).
+fn edit_ops(e: EditArgs) -> Result<Vec<Op>> {
+    let mut ops = vec![];
+    for t in e.rm_edges {
+        ops.push(Op::RmEdge {
+            id: e.id.clone(),
+            to: t,
+        });
+    }
+    for rc in e.rm_children {
+        let (name, arg) = rc
+            .split_once(':')
+            .with_context(|| format!("--rm-child `{rc}`: expected name:arg"))?;
+        ops.push(Op::RmChild {
+            id: e.id.clone(),
+            name: name.into(),
+            arg: arg.into(),
+        });
+    }
+    if let Some(kind) = e.kind {
+        ops.push(Op::SetKind {
+            id: e.id.clone(),
+            kind,
+        });
+    }
+    for kv in e.sets {
+        let (k, v) = kv
+            .split_once('=')
+            .with_context(|| format!("--set `{kv}`: expected key=value"))?;
+        ops.push(Op::SetAttr {
+            id: e.id.clone(),
+            key: k.into(),
+            value: v.into(),
+        });
+    }
+    for c in e.children {
+        ops.push(Op::AddChild {
+            id: e.id.clone(),
+            line: c,
+        });
+    }
+    if ops.is_empty() {
+        bail!("no operations given");
+    }
+    Ok(ops)
+}
+
+/// `--attr key` ya da `--attr key=value` eşleşmesi.
+fn attr_matches(n: &duflow_core::model::Node, spec: &str) -> bool {
+    match spec.split_once('=') {
+        Some((k, v)) => n.attrs.get(k).is_some_and(|x| x == v),
+        None => n.attrs.contains_key(spec),
+    }
+}
+
+/// Rev bir dizinse oradan yükle (gitignore'lu flows kopyası), değilse git rev.
+fn graph_at_or_dir(dir: &Path, rev: &str) -> Result<Graph> {
+    let p = Path::new(rev);
+    if p.is_dir() {
+        return Ok(Graph::load(p)?);
+    }
+    graph_at(dir, rev)
 }
 
 fn apply_ops(dir: &Path, ops: &[Op], dry_run: bool, json: bool) -> Result<()> {
@@ -768,13 +821,12 @@ fn op_name(op: &Op) -> String {
         .unwrap_or_default()
 }
 
-/// Kategori × namespace (ID'nin ilk segmenti, yoksa dosya) tablosu.
-fn lint_summary(d: &[duflow_core::lint::Diagnostic]) -> String {
+/// Kategori × namespace (ID'nin ilk `depth` segmenti, yoksa dosya) tablosu.
+fn lint_summary(d: &[duflow_core::lint::Diagnostic], depth: usize) -> String {
     use std::collections::{BTreeMap, BTreeSet};
     let ns_of = |x: &duflow_core::lint::Diagnostic| -> String {
         x.id.as_deref()
-            .and_then(|i| i.split('.').next())
-            .map(String::from)
+            .map(|i| i.split('.').take(depth).collect::<Vec<_>>().join("."))
             .unwrap_or_else(|| {
                 x.file
                     .split('/')
@@ -792,9 +844,10 @@ fn lint_summary(d: &[duflow_core::lint::Diagnostic]) -> String {
         *table.entry(x.code).or_default().entry(ns).or_default() += 1;
     }
     let spaces: Vec<String> = spaces.into_iter().collect();
+    let w = spaces.iter().map(|n| n.len()).max().unwrap_or(0).clamp(8, 16);
     let mut s = format!("{:<22}", "code");
     for ns in &spaces {
-        s.push_str(&format!(" {:>8}", if ns.len() > 8 { &ns[..8] } else { ns }));
+        s.push_str(&format!(" {:>w$}", if ns.len() > w { &ns[..w] } else { ns }));
     }
     s.push_str("    total\n");
     for (code, row) in &table {
@@ -804,7 +857,7 @@ fn lint_summary(d: &[duflow_core::lint::Diagnostic]) -> String {
             let n = row.get(ns).copied().unwrap_or(0);
             total += n;
             s.push_str(&format!(
-                " {:>8}",
+                " {:>w$}",
                 if n == 0 {
                     "·".to_string()
                 } else {
@@ -1037,4 +1090,26 @@ fn skill_install(project: bool) -> Result<()> {
         "  claude plugin marketplace add {REPO_OWNER}/{REPO_NAME} && claude plugin install duflow@duflow"
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn edit_removals_come_before_additions() {
+        let e = EditArgs {
+            id: "a.b".into(),
+            sets: vec!["desc=x".into()],
+            kind: Some("state".into()),
+            children: vec!["-> \"a.c\" case=\"go\"".into()],
+            rm_edges: vec!["a.c".into()],
+            rm_children: vec!["sets:n".into()],
+        };
+        let names: Vec<String> = edit_ops(e).unwrap().iter().map(op_name).collect();
+        assert_eq!(
+            names,
+            vec!["rm_edge", "rm_child", "set_kind", "set_attr", "add_child"]
+        );
+    }
 }

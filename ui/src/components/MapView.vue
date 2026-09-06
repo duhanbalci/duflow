@@ -36,7 +36,7 @@ const model = computed(() => {
   // sütun = BFS derinliği (root gruplarından)
   const depth = new Map<string, number>()
   const q: string[] = []
-  for (const r of g.roots) { const k = keyOf(r); if (nodes.has(k) && !depth.has(k)) { depth.set(k, 0); q.push(k) } }
+  for (const r of [...g.roots, ...Object.keys(g.entries)]) { const k = keyOf(r); if (nodes.has(k) && !depth.has(k)) { depth.set(k, 0); q.push(k) } }
   while (q.length) {
     const cur = q.shift()!
     for (const e of edges.values()) if (e.from === cur && !depth.has(e.to)) { depth.set(e.to, depth.get(cur)! + 1); q.push(e.to) }

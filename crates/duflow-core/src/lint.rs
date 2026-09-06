@@ -72,6 +72,40 @@ pub fn lint(g: &Graph) -> Vec<Diagnostic> {
     let layers: BTreeSet<&str> = g.config.layers.iter().map(String::as_str).collect();
     let reachable = g.reachable_from_roots();
     let root_set: BTreeSet<&str> = g.root_ids().into_iter().collect();
+    // guard ifadesi (kenar ya da hedefsiz `-> outcome=`): var tanımlı mı, yerel sayaç yazılıyor mu
+    let guard_vars = |d: &mut Vec<Diagnostic>, n: &Node, w: &str, line: usize| {
+        for v in expr::idents(w) {
+            if g.vars.contains_key(&v) {
+                continue;
+            }
+            if g.is_local_var(&v) {
+                if g.local_var_writers(local_group(&n.id), &v).is_empty() {
+                    push(
+                        d,
+                        Level::Error,
+                        "local_var_never_set",
+                        &n.file,
+                        line,
+                        Some(&n.id),
+                        format!(
+                            "guard `{w}`: local `{v}` is never `sets` in group `{}` (declare a `var` if it is global)",
+                            local_group(&n.id)
+                        ),
+                    );
+                }
+            } else {
+                push(
+                    d,
+                    Level::Error,
+                    "unknown_var",
+                    &n.file,
+                    line,
+                    Some(&n.id),
+                    format!("guard `{w}`: `{v}` is not a defined var"),
+                );
+            }
+        }
+    };
 
     for n in g.nodes.values() {
         // ID ↔ dosya yolu
@@ -113,7 +147,7 @@ pub fn lint(g: &Graph) -> Vec<Diagnostic> {
                 format!("`{}` has no `desc`", n.id),
             );
         }
-        if !reachable.contains(&n.id) && !root_set.contains(n.id.as_str()) {
+        if !reachable.contains(&n.id) && !root_set.contains(n.id.as_str()) && !is_entry(n) {
             push(
                 &mut d,
                 Level::Error,
@@ -165,38 +199,12 @@ pub fn lint(g: &Graph) -> Vec<Diagnostic> {
                 }
             }
             if let Some(w) = &e.when {
-                for v in expr::idents(w) {
-                    if g.vars.contains_key(&v) {
-                        continue;
-                    }
-                    if g.is_local_var(&v) {
-                        // yerel sayaç: tanım istemez, grupta bir `sets` ister
-                        if g.local_var_writers(&group_of(&n.id), &v).is_empty() {
-                            push(
-                                &mut d,
-                                Level::Error,
-                                "local_var_never_set",
-                                &n.file,
-                                e.line,
-                                Some(&n.id),
-                                format!(
-                                    "guard `{w}`: local `{v}` is never `sets` in group `{}` (declare a `var` if it is global)",
-                                    group_of(&n.id)
-                                ),
-                            );
-                        }
-                    } else {
-                        push(
-                            &mut d,
-                            Level::Error,
-                            "unknown_var",
-                            &n.file,
-                            e.line,
-                            Some(&n.id),
-                            format!("guard `{w}`: `{v}` is not a defined var"),
-                        );
-                    }
-                }
+                guard_vars(&mut d, n, w, e.line);
+            }
+        }
+        for o in &n.outcomes {
+            if let Some(w) = &o.when {
+                guard_vars(&mut d, n, w, o.line);
             }
         }
         // check kullanımları
@@ -292,13 +300,38 @@ pub fn lint(g: &Graph) -> Vec<Diagnostic> {
                     format!("`{}` triggers nothing", n.id),
                 );
             }
+            // olay node'u yalnız dinlenir (`on`); teslimat kenarı domain'den değil altyapıdan çıkar
+            Kind::Event
+                if n
+                    .edges
+                    .iter()
+                    .any(|e| !matches!(e.kind, EdgeKind::On { .. })) =>
+            {
+                push(
+                    &mut d,
+                    Level::Warning,
+                    "event_has_transition",
+                    &n.file,
+                    n.line,
+                    Some(&n.id),
+                    format!(
+                        "event `{}` has outgoing transitions; events are consumed via `on`, model delivery once in the infrastructure chain",
+                        n.id
+                    ),
+                );
+            }
             _ => {}
         }
-        // guard'sız ve etiketsiz birden fazla koşulsuz `->` (case="..." gerçek dallanmayı adlandırır)
+        // guard'sız ve etiketsiz birden fazla koşulsuz `->` (case="..." dallanmayı, seq= sırayı adlandırır)
         let plain_unguarded = n
             .edges
             .iter()
-            .filter(|e| matches!(e.kind, EdgeKind::Plain) && e.when.is_none() && e.case.is_none())
+            .filter(|e| {
+                matches!(e.kind, EdgeKind::Plain)
+                    && e.when.is_none()
+                    && e.case.is_none()
+                    && e.seq.is_none()
+            })
             .count();
         if plain_unguarded > 1 {
             push(
@@ -310,6 +343,42 @@ pub fn lint(g: &Graph) -> Vec<Diagnostic> {
                 Some(&n.id),
                 format!("`{}` has {plain_unguarded} unguarded transitions", n.id),
             );
+        }
+        // aynı node'da tekrar eden case= / seq= sessizce geçmesin
+        let mut seen_case: BTreeSet<&str> = BTreeSet::new();
+        let cases = n
+            .edges
+            .iter()
+            .filter_map(|e| e.case.as_deref().map(|c| (c, e.line)))
+            .chain(n.outcomes.iter().filter_map(|o| o.case.as_deref().map(|c| (c, o.line))));
+        for (c, line) in cases {
+            if !seen_case.insert(c) {
+                push(
+                    &mut d,
+                    Level::Warning,
+                    "duplicate_case",
+                    &n.file,
+                    line,
+                    Some(&n.id),
+                    format!("`{}`: case `{c}` used more than once", n.id),
+                );
+            }
+        }
+        let mut seen_seq: BTreeSet<u32> = BTreeSet::new();
+        for e in &n.edges {
+            if let Some(q) = e.seq
+                && !seen_seq.insert(q)
+            {
+                push(
+                    &mut d,
+                    Level::Warning,
+                    "duplicate_seq",
+                    &n.file,
+                    e.line,
+                    Some(&n.id),
+                    format!("`{}`: seq {q} used more than once", n.id),
+                );
+            }
         }
     }
 
@@ -454,7 +523,9 @@ pub fn lint(g: &Graph) -> Vec<Diagnostic> {
             );
         }
     }
-    if g.roots.len() > g.config.max_roots {
+    // periyodik root'lar (`every=`) şemanın istediği şey, sayıma girmez
+    let entry_roots = g.roots.iter().filter(|r| r.every.is_none()).count();
+    if entry_roots > g.config.max_roots {
         push(
             &mut d,
             Level::Warning,
@@ -463,8 +534,7 @@ pub fn lint(g: &Graph) -> Vec<Diagnostic> {
             0,
             None,
             format!(
-                "{} roots (max_roots {}); entry points should be few, prefer edges",
-                g.roots.len(),
+                "{entry_roots} non-periodic roots (max_roots {}); entry points should be few, prefer edges or `entry=` on calls",
                 g.config.max_roots
             ),
         );
@@ -509,18 +579,22 @@ pub fn has_errors(d: &[Diagnostic]) -> bool {
     d.iter().any(|x| x.level == Level::Error)
 }
 
-/// `src="path[#symbol|:line]"` attr'ı repoya karşı: dosya var mı, sembol adı dosyada geçiyor mu.
-/// Graf saf kaldığı için ayrı fonksiyon; CLI `validate` repo köküyle çağırır. Dil bilmez:
-/// sembol araması alt-dize.
+/// `src="path[#symbol|:line]"` attr'ı repoya karşı: dosya var mı, sembol adı dosyada tam kelime
+/// olarak geçiyor mu. Kod dosyasına sembolsüz/satırsız işaret `src_symbol_unchecked` uyarısı
+/// (sessiz geçmesin). Graf saf kaldığı için ayrı fonksiyon; CLI `validate` repo köküyle çağırır.
 pub fn src_lint(g: &Graph, repo_root: &std::path::Path) -> Vec<Diagnostic> {
+    const CODE_EXT: [&str; 8] = ["rs", "ts", "tsx", "js", "jsx", "vue", "go", "py"];
     let mut d = vec![];
     for n in g.nodes.values() {
         let Some(src) = n.attrs.get("src") else {
             continue;
         };
-        let (path, symbol) = match src.split_once('#') {
-            Some((p, s)) => (p, Some(s)),
-            None => (src.rsplit_once(':').map(|(p, _)| p).unwrap_or(src), None),
+        let (path, symbol, line) = match src.split_once('#') {
+            Some((p, s)) => (p, Some(s), None),
+            None => match src.rsplit_once(':') {
+                Some((p, l)) if l.parse::<usize>().is_ok() => (p, None, Some(l)),
+                _ => (src.as_str(), None, None),
+            },
         };
         let full = repo_root.join(path);
         let Ok(text) = std::fs::read_to_string(&full) else {
@@ -534,20 +608,55 @@ pub fn src_lint(g: &Graph, repo_root: &std::path::Path) -> Vec<Diagnostic> {
             });
             continue;
         };
-        if let Some(sym) = symbol
-            && !text.contains(sym)
-        {
-            d.push(Diagnostic {
+        match symbol {
+            Some(sym) if !contains_word(&text, sym) => d.push(Diagnostic {
                 level: Level::Warning,
                 code: "src_symbol_missing",
                 message: format!("`{}`: `{sym}` not found in `{path}`", n.id),
                 file: n.file.clone(),
                 line: n.line,
                 id: Some(n.id.clone()),
-            });
+            }),
+            None if line.is_none()
+                && std::path::Path::new(path)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| CODE_EXT.contains(&e)) =>
+            {
+                d.push(Diagnostic {
+                    level: Level::Warning,
+                    code: "src_symbol_unchecked",
+                    message: format!(
+                        "`{}`: src `{path}` names no `#symbol` (or `:line`), nothing to verify",
+                        n.id
+                    ),
+                    file: n.file.clone(),
+                    line: n.line,
+                    id: Some(n.id.clone()),
+                });
+            }
+            _ => {}
         }
     }
     d
+}
+
+/// `word` metinde tam kelime olarak (tanımlayıcı karakterleriyle çevrili değil) geçiyor mu.
+fn contains_word(text: &str, word: &str) -> bool {
+    let is_ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let bytes = text.as_bytes();
+    let mut from = 0;
+    while let Some(i) = text[from..].find(word) {
+        let start = from + i;
+        let end = start + word.len();
+        let before_ok = start == 0 || !is_ident(bytes[start - 1]);
+        let after_ok = end >= bytes.len() || !is_ident(bytes[end]);
+        if before_ok && after_ok {
+            return true;
+        }
+        from = start + 1;
+    }
+    false
 }
 
 #[cfg(test)]
@@ -741,14 +850,91 @@ state "a.start" desc="s" { -> "a.mid" }
     }
 
     #[test]
-    fn src_attr_is_checked_against_the_repo() {
-        let dir = std::env::temp_dir().join(format!("duflow-src-{}", std::process::id()));
-        std::fs::create_dir_all(dir.join("src")).unwrap();
-        std::fs::write(dir.join("src/api.rs"), "pub fn create() {}\n").unwrap();
+    fn local_var_scope_is_the_prefix_up_to_the_last_dot() {
+        let g = mk(&[(
+            "restore.kdl",
+            "root \"restore.snapshot\"\nstate \"restore.snapshot\" desc=\"s\" {\n  sets \"done\" \"true\"\n  -> \"restore.applying\"\n}\nstate \"restore.applying\" desc=\"a\" {\n  -> \"restore.snapshot\" when=\"done == false\"\n}\n",
+        )]);
+        let d = lint(&g);
+        assert!(!codes(&d).contains(&"local_var_never_set"), "{d:?}");
+    }
+
+    #[test]
+    fn seq_steps_are_not_ambiguous_but_duplicates_warn() {
         let g = mk(&[(
             "a.kdl",
             &format!(
-                "{BASE}\nstate \"a.mid\" desc=\"m\" src=\"src/api.rs#create\"\nstate \"a.x\" desc=\"x\" src=\"src/api.rs#gone\"\nstate \"a.y\" desc=\"y\" src=\"src/nope.rs\"\nstate \"a.z\" desc=\"z\" src=\"src/api.rs:1\"\n"
+                "{BASE}\nstate \"a.mid\" desc=\"m\" {{\n  -> \"a.x\" seq=1\n  -> \"a.y\" seq=2\n}}\nstate \"a.x\" desc=\"x\" {{\n  -> \"a.y\" case=\"ok\"\n  -> \"a.mid\" case=\"ok\"\n  -> \"a.mid\" seq=1\n  -> \"a.y\" seq=1\n}}\nstate \"a.y\" desc=\"y\"\n"
+            ),
+        )]);
+        let d = lint(&g);
+        assert!(!codes(&d).contains(&"ambiguous_transition"), "{d:?}");
+        assert!(
+            d.iter()
+                .any(|x| x.code == "duplicate_case" && x.id.as_deref() == Some("a.x")),
+            "{d:?}"
+        );
+        assert!(
+            d.iter()
+                .any(|x| x.code == "duplicate_seq" && x.id.as_deref() == Some("a.x")),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    fn arrow_outcome_guards_are_linted_like_edges() {
+        let g = mk(&[(
+            "a.kdl",
+            &format!(
+                "{BASE}\nstate \"a.mid\" desc=\"m\" {{\n  -> outcome=\"toast\" when=\"ghost > 1\"\n}}\n"
+            ),
+        )]);
+        let d = lint(&g);
+        assert!(
+            d.iter()
+                .any(|x| x.code == "local_var_never_set" && x.message.contains("ghost")),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    fn entry_nodes_are_reachable_without_roots_and_periodic_roots_are_not_counted() {
+        let mut src = String::from(BASE);
+        src.push_str("state \"a.mid\" desc=\"m\"\ncall \"a.admin\" desc=\"cli\" entry=\"cli\" method=\"POST\" path=\"/x\" { returns 200 -> \"a.mid\" }\n");
+        for i in 0..11 {
+            src.push_str(&format!("state \"a.r{i}\" desc=\"r\"\nroot \"a.r{i}\" every=\"30s\"\n"));
+        }
+        let d = lint(&mk(&[("a.kdl", &src)]));
+        assert!(!codes(&d).contains(&"unreachable"), "{d:?}");
+        assert!(!codes(&d).contains(&"too_many_roots"), "{d:?}");
+    }
+
+    #[test]
+    fn event_nodes_should_not_carry_transitions() {
+        let g = mk(&[(
+            "a.kdl",
+            &format!(
+                "{BASE}\nstate \"a.mid\" desc=\"m\" {{\n  on \"a.ev\" -> \"a.start\"\n}}\nevent \"a.ev\" desc=\"e\" {{\n  -> \"a.start\"\n}}\n"
+            ),
+        )]);
+        let d = lint(&g);
+        assert!(
+            d.iter()
+                .any(|x| x.code == "event_has_transition" && x.id.as_deref() == Some("a.ev")),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    fn src_attr_is_checked_against_the_repo() {
+        let dir = std::env::temp_dir().join(format!("duflow-src-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/api.rs"), "pub fn create_instance() {}\n").unwrap();
+        std::fs::write(dir.join("src/View.vue"), "<script setup lang=\"ts\">\nasync function submit() {}\n</script>\n").unwrap();
+        let g = mk(&[(
+            "a.kdl",
+            &format!(
+                "{BASE}\nstate \"a.mid\" desc=\"m\" src=\"src/api.rs#create_instance\"\nstate \"a.x\" desc=\"x\" src=\"src/api.rs#gone\"\nstate \"a.y\" desc=\"y\" src=\"src/nope.rs\"\nstate \"a.z\" desc=\"z\" src=\"src/api.rs:1\"\nstate \"a.w\" desc=\"w\" src=\"src/api.rs#create\"\nstate \"a.v\" desc=\"v\" src=\"src/View.vue#submit\"\nstate \"a.u\" desc=\"u\" src=\"src/View.vue\"\n"
             ),
         )]);
         let d = src_lint(&g, &dir);
@@ -761,6 +947,11 @@ state "a.start" desc="s" { -> "a.mid" }
         assert_eq!(by_id("a.x"), Some("src_symbol_missing"));
         assert_eq!(by_id("a.y"), Some("src_missing"));
         assert_eq!(by_id("a.z"), None);
+        // alt-dize değil tam kelime: `create` ≠ `create_instance`
+        assert_eq!(by_id("a.w"), Some("src_symbol_missing"));
+        assert_eq!(by_id("a.v"), None);
+        // kod dosyası, sembol/satır yok → uyar (sessiz geçme)
+        assert_eq!(by_id("a.u"), Some("src_symbol_unchecked"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

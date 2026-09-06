@@ -62,6 +62,7 @@ const diffTag = computed(() => {
 const listens = computed(() => (full.value?.out ?? []).filter((e) => e.label.startsWith('on ')).map((e) => e.label.slice(3)))
 const isRoot = computed(() => g.value?.roots.includes(props.id))
 const every = computed(() => g.value?.every[props.id])
+const entry = computed(() => g.value?.entries[props.id])
 /** `requires x` → perm:x check'i; chip'te "requires x" yazar */
 const checkLabel = (name: string) => name.startsWith('perm:') ? 'requires ' + name.slice(5) : 'check ' + name
 </script>
@@ -73,6 +74,7 @@ const checkLabel = (name: string) => name.startsWith('perm:') ? 'requires ' + na
     <div class="kind">
       <span class="dot"></span>{{ node?.kind }}
       <span v-if="isRoot" class="root">root<template v-if="every"> · every {{ every }}</template></span>
+      <span v-else-if="entry" class="root">entry · {{ entry }}</span>
       <span v-if="diffTag" class="chip" :class="diffTag">{{ diffTag === 'added' ? 'new' : diffTag === 'removed' ? 'removed' : 'changed' }}</span>
     </div>
     <div class="id mono">{{ id }}</div>

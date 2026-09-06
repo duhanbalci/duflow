@@ -211,9 +211,20 @@ impl Graph {
         self.roots.iter().map(|r| r.id.as_str()).collect()
     }
 
-    /// Root'lardan erişilebilen küme.
+    /// `entry="…"` taşıyan node'lar: dış istemcinin doğrudan çağırdığı girişler.
+    pub fn entry_ids(&self) -> Vec<&str> {
+        self.nodes
+            .values()
+            .filter(|n| is_entry(n))
+            .map(|n| n.id.as_str())
+            .collect()
+    }
+
+    /// Root'lardan ve `entry=` node'larından erişilebilen küme.
     pub fn reachable_from_roots(&self) -> BTreeSet<String> {
-        self.reach_forward(&self.root_ids())
+        let mut starts = self.root_ids();
+        starts.extend(self.entry_ids());
+        self.reach_forward(&starts)
     }
 
     pub fn reach_forward(&self, starts: &[&str]) -> BTreeSet<String> {
@@ -283,10 +294,11 @@ impl Graph {
         None
     }
 
-    /// Herhangi bir root'tan hedefe en kısa yol.
+    /// Herhangi bir root'tan (ya da `entry=` node'undan) hedefe en kısa yol.
     pub fn path_from_roots(&self, to: &str) -> Option<Vec<String>> {
         self.root_ids()
-            .iter()
+            .into_iter()
+            .chain(self.entry_ids())
             .filter_map(|r| self.shortest_path(r, to))
             .min_by_key(|p| p.len())
     }
@@ -403,11 +415,11 @@ impl Graph {
         !self.vars.contains_key(name) && !name.contains('.')
     }
 
-    /// Yerel sayacı aynı grupta (`group_of`) yazan node var mı.
+    /// Yerel sayacı aynı kapsamda (`local_group`) yazan node var mı.
     pub fn local_var_writers(&self, group: &str, name: &str) -> Vec<&Node> {
         self.nodes
             .values()
-            .filter(|n| group_of(&n.id) == group && n.sets.iter().any(|s| s.var == name))
+            .filter(|n| local_group(&n.id) == group && n.sets.iter().any(|s| s.var == name))
             .collect()
     }
 

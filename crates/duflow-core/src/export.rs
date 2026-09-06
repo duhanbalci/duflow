@@ -5,7 +5,7 @@ use crate::graph::Graph;
 use crate::model::*;
 use serde::Serialize;
 
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 #[derive(Serialize)]
 pub struct Export<'a> {
@@ -18,6 +18,8 @@ pub struct Export<'a> {
     /// Periyodik root'lar: id → `every`
     pub every: std::collections::BTreeMap<&'a str, &'a str>,
     pub perms: Vec<&'a PermDef>,
+    /// `entry="api"` node'ları: id → entry etiketi (root olmayan dış girişler)
+    pub entries: std::collections::BTreeMap<&'a str, &'a str>,
     pub views: Vec<&'a ViewDef>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub diff: Option<ExportDiff>,
@@ -190,6 +192,11 @@ pub fn export<'a>(g: &'a Graph, diff: Option<&GraphDiff>) -> Export<'a> {
             .filter_map(|r| r.every.as_deref().map(|e| (r.id.as_str(), e)))
             .collect(),
         perms: g.perms.values().collect(),
+        entries: g
+            .nodes
+            .values()
+            .filter_map(|n| n.attrs.get("entry").map(|e| (n.id.as_str(), e.as_str())))
+            .collect(),
         views: g.views.iter().collect(),
         diff,
     }
@@ -217,11 +224,11 @@ mod tests {
     fn export_has_incoming_outcomes_and_periodic_roots() {
         let g = Graph::from_sources(&[(
             "a.kdl".into(),
-            "root \"a.start\" every=\"30s\"\nstate \"a.start\" desc=\"s\" { -> \"a.end\" case=\"go\" }\ncall \"a.end\" desc=\"e\" {\n  check \"c\" fail=409 outcome=\"toast: no\"\n  returns 500 outcome=\"boom\"\n  returns 200 -> \"a.start\"\n}\ncheck \"c\"\n".into(),
+            "root \"a.start\" every=\"30s\"\nstate \"a.start\" desc=\"s\" { -> \"a.end\" case=\"go\"\n -> outcome=\"bye\" when=\"n > 1\"\n sets \"n\" \"+1\" }\ncall \"a.end\" desc=\"e\" entry=\"api\" {\n  check \"c\" fail=409 outcome=\"toast: no\"\n  returns 500 outcome=\"boom\"\n  returns 200 -> \"a.start\"\n}\ncheck \"c\"\n".into(),
         )])
         .unwrap();
         let e = export(&g, None);
-        assert_eq!(e.schema, 2);
+        assert_eq!(e.schema, 3);
         let v = serde_json::to_value(&e).unwrap();
         let end = v["nodes"]
             .as_array()
@@ -244,5 +251,14 @@ mod tests {
         );
         assert_eq!(v["every"]["a.start"], "30s");
         assert_eq!(v["roots"][0], "a.start");
+        assert_eq!(v["entries"]["a.end"], "api");
+        let start = v["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["id"] == "a.start")
+            .unwrap();
+        assert_eq!(start["outcomes"][0]["label"], "when n > 1");
+        assert_eq!(start["outcomes"][0]["text"], "bye");
     }
 }

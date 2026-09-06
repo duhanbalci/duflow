@@ -170,6 +170,13 @@ pub fn parse_file(file: &str, src: &str) -> Result<FileItems, ParseError> {
                 {
                     cfg.watch.extend(args(w).iter().map(|v| val_str(v)));
                 }
+                if let Some(m) = node.children().and_then(|c| c.get("max_roots")) {
+                    cfg.max_roots = args(m)
+                        .first()
+                        .and_then(|v| v.as_integer())
+                        .and_then(|i| usize::try_from(i).ok())
+                        .ok_or_else(|| cx.err(m, "`max_roots` expects an integer"))?;
+                }
                 items.config = Some(cfg);
             }
             other => return Err(cx.err(node, format!("unknown top-level node `{other}`"))),
@@ -229,21 +236,39 @@ fn parse_node(cx: &Ctx, node: &KdlNode) -> Result<Node, ParseError> {
         let cname = c.name().value();
         let when = prop_str(c, "when");
         let case = prop_str(c, "case");
+        let seq = prop(c, "seq")
+            .and_then(|v| v.as_integer())
+            .and_then(|i| u32::try_from(i).ok());
         match cname {
             "desc" => n.desc = args(c).first().map(|v| val_str(v)),
             "doc" => n.doc = args(c).first().map(|v| val_str(v)),
             "->" => {
-                let to = args(c)
-                    .first()
-                    .map(|v| val_str(v))
-                    .ok_or_else(|| cx.err(c, "`->` hedef ister"))?;
-                n.edges.push(Edge {
-                    to,
-                    kind: EdgeKind::Plain,
-                    when,
-                    case,
-                    line,
-                });
+                // `-> "x"` ya da hedefsiz `-> outcome="..." [when=… case=…]`
+                match (args(c).first().map(|v| val_str(v)), prop_str(c, "outcome")) {
+                    (Some(to), None) => n.edges.push(Edge {
+                        to,
+                        kind: EdgeKind::Plain,
+                        when,
+                        case,
+                        seq,
+                        line,
+                    }),
+                    (None, Some(text)) => n.outcomes.push(Outcome {
+                        status: None,
+                        code: None,
+                        text,
+                        when,
+                        case,
+                        arrow: true,
+                        line,
+                    }),
+                    (Some(_), Some(_)) => {
+                        return Err(cx.err(c, "`->` takes either a target or `outcome=`, not both"));
+                    }
+                    (None, None) => {
+                        return Err(cx.err(c, "`->` requires a target or `outcome=\"...\"`"));
+                    }
+                }
             }
             "on" => {
                 let event = args(c)
@@ -257,6 +282,7 @@ fn parse_node(cx: &Ctx, node: &KdlNode) -> Result<Node, ParseError> {
                     kind: EdgeKind::On { event },
                     when,
                     case,
+                    seq,
                     line,
                 });
             }
@@ -284,12 +310,16 @@ fn parse_node(cx: &Ctx, node: &KdlNode) -> Result<Node, ParseError> {
                         kind: EdgeKind::Returns { status, code },
                         when,
                         case,
+                        seq,
                         line,
                     }),
                     (None, Some(text)) => n.outcomes.push(Outcome {
                         status,
                         code,
                         text,
+                        when,
+                        case,
+                        arrow: false,
                         line,
                     }),
                     (None, None) => {
@@ -306,6 +336,7 @@ fn parse_node(cx: &Ctx, node: &KdlNode) -> Result<Node, ParseError> {
                         kind: EdgeKind::Calls,
                         when: when.clone(),
                         case: case.clone(),
+                        seq,
                         line,
                     });
                 }
@@ -458,11 +489,13 @@ project "duploy" {
   layers "ui" "api" "domain" "infra"
   watch "dorch/src/api/**" "dorch/src/deploy/**"
   watch "dorch/ui/src/views/**"
+  max_roots 20
 }
 "#;
         let it = parse_file("flow.kdl", src).unwrap();
         let cfg = it.config.unwrap();
         assert_eq!(cfg.name, "duploy");
+        assert_eq!(cfg.max_roots, 20);
         assert_eq!(cfg.layers.len(), 4);
         assert_eq!(
             cfg.watch,
@@ -518,6 +551,44 @@ root "network.liveness" every="30s"
         assert_eq!(perm.deny, Some(404));
         assert_eq!(perm.fail_to.as_deref(), Some("ui.not_found"));
         assert_eq!(it.roots[0].every.as_deref(), Some("30s"));
+    }
+
+    #[test]
+    fn parses_seq_steps_and_arrow_outcomes() {
+        let src = r#"
+state "purge.start" desc="x" {
+  -> "purge.a" seq=1
+  -> "purge.b" seq=2
+  -> outcome="toast: invalid credentials" when="failures > 3"
+  -> outcome="done" case="empty"
+}
+"#;
+        let it = parse_file("t.kdl", src).unwrap();
+        let n = &it.nodes[0];
+        assert_eq!(n.edges.len(), 2);
+        assert_eq!(n.edges[0].seq, Some(1));
+        assert_eq!(n.edges[1].label(), "#2");
+        assert_eq!(n.outcomes.len(), 2);
+        assert!(n.outcomes[0].arrow);
+        assert_eq!(n.outcomes[0].when.as_deref(), Some("failures > 3"));
+        assert_eq!(n.outcomes[0].label(), "when failures > 3");
+        assert_eq!(n.outcomes[1].label(), "case empty");
+        let err = parse_file("t.kdl", "state \"a.b\" { -> }\n").unwrap_err();
+        assert!(err.to_string().contains("outcome"), "{err}");
+        let err = parse_file("t.kdl", "state \"a.b\" { -> \"a.c\" outcome=\"x\" }\n").unwrap_err();
+        assert!(err.to_string().contains("not both"), "{err}");
+    }
+
+    #[test]
+    fn requires_accepts_fail_and_code_override() {
+        let it = parse_file(
+            "t.kdl",
+            "call \"a.b\" { requires \"deploy.trigger\" fail=404 code=\"NAME_UNKNOWN\"\n returns 200 outcome=\"ok\" }\n",
+        )
+        .unwrap();
+        let c = &it.nodes[0].checks[0];
+        assert_eq!(c.fail, Some(404));
+        assert_eq!(c.code.as_deref(), Some("NAME_UNKNOWN"));
     }
 
     #[test]

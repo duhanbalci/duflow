@@ -443,6 +443,22 @@ impl Workspace {
                         touched |= drop;
                         !drop
                     });
+                    // check/perm tanımındaki varsayılan fail hedefi (`-> "id"` ya da `fail_to=`)
+                    for n in doc.nodes_mut() {
+                        let name = n.name().value();
+                        if (name == "check" || name == "perm") && prop_or_arrow(n) == Some(id.into()) {
+                            strip_fail_target(n);
+                            touched = true;
+                        }
+                    }
+                }
+                if kind == "var" {
+                    for n in doc.nodes_mut() {
+                        if n.name().value() == "check" && prop_eq_word(n, "reads", id) {
+                            strip_word(n, "reads", id);
+                            touched = true;
+                        }
+                    }
                 }
                 for n in doc.nodes_mut() {
                     if let Some(ch) = n.children_mut() {
@@ -738,6 +754,46 @@ fn prop_or_arrow(n: &KdlNode) -> Option<String> {
         .iter()
         .find(|e| e.name().map(|k| k.value()) == Some("fail_to"))
         .map(|e| val_str(e.value()))
+}
+
+/// Tanım satırından `-> "x"` kuyruğunu ve `fail_to=` prop'unu düşürür.
+fn strip_fail_target(n: &mut KdlNode) {
+    let entries = n.entries_mut();
+    let arrow = entries
+        .iter()
+        .position(|e| e.name().is_none() && e.value().as_string() == Some("->"));
+    if let Some(i) = arrow {
+        // `->` ve hemen ardındaki hedef
+        entries.remove(i);
+        if entries.get(i).is_some_and(|e| e.name().is_none()) {
+            entries.remove(i);
+        }
+    }
+    entries.retain(|e| e.name().map(|k| k.value()) != Some("fail_to"));
+}
+
+/// Boşlukla ayrılmış liste prop'undan (`reads="a b"`) kelimeyi çıkarır; boş kalırsa prop silinir.
+fn strip_word(n: &mut KdlNode, key: &str, word: &str) {
+    let mut empty = false;
+    for e in n.entries_mut() {
+        if e.name().map(|k| k.value()) != Some(key) {
+            continue;
+        }
+        let rest: Vec<&str> = e
+            .value()
+            .as_string()
+            .map(|s| s.split_whitespace().filter(|w| *w != word).collect())
+            .unwrap_or_default();
+        if rest.is_empty() {
+            empty = true;
+        } else {
+            set_str(e, &rest.join(" "));
+        }
+    }
+    if empty {
+        n.entries_mut()
+            .retain(|e| e.name().map(|k| k.value()) != Some(key));
+    }
 }
 
 fn val_str(v: &KdlValue) -> String {
@@ -1142,6 +1198,41 @@ mod tests2 {
                 && p["vars.kdl"].trim().is_empty()
         );
         assert!(p["roots.kdl"].trim().is_empty(), "{}", p["roots.kdl"]);
+    }
+
+    #[test]
+    fn rm_force_clears_definition_attrs_that_point_at_the_removed_id() {
+        let (_d, mut w) = ws(&[
+            ("ui.kdl", "state \"ui.toast\" desc=\"t\"\nstate \"ui.nf\" desc=\"n\"\n"),
+            (
+                "checks.kdl",
+                "check \"has_ip\" desc=\"ip\" reads=\"role attempts\" -> \"ui.toast\"\ncheck \"other\" fail_to=\"ui.toast\" reads=\"attempts\"\n",
+            ),
+            ("perms.kdl", "perm \"deploy.trigger\" deny=404 -> \"ui.nf\"\n"),
+            ("vars.kdl", "var \"role\"\nvar \"attempts\" type=\"int\"\n"),
+        ]);
+        w.apply(&Op::RmNode {
+            id: "ui.toast".into(),
+            force: true,
+        })
+        .unwrap();
+        w.apply(&Op::RmNode {
+            id: "ui.nf".into(),
+            force: true,
+        })
+        .unwrap();
+        w.apply(&Op::RmNode {
+            id: "attempts".into(),
+            force: true,
+        })
+        .unwrap();
+        let p = w.preview();
+        let checks = &p["checks.kdl"];
+        assert!(!checks.contains("ui.toast") && !checks.contains("->"), "{checks}");
+        assert!(checks.contains("check \"has_ip\" desc=\"ip\" reads=\"role\""), "{checks}");
+        assert!(!checks.contains("attempts") && !checks.contains("reads=\"\""), "{checks}");
+        assert!(!p["perms.kdl"].contains("ui.nf"), "{}", p["perms.kdl"]);
+        assert!(p["perms.kdl"].contains("deny=404"));
     }
 
     #[test]

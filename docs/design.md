@@ -84,20 +84,31 @@ Kenar node'un içinde inline yazılır, ayrı varlık değil:
 |---|---|
 | `-> "x"` | koşulsuz geçiş |
 | `-> "x" when="expr"` | guard'lı geçiş |
-| `-> "x" case="pool_exhausted"` | etiketli dal: guard'sız gerçek dallanma (fan-out). `case` ya da `when` taşıyan kenar belirsiz sayılmaz |
+| `-> "x" case="pool_exhausted"` | etiketli dal: guard'sız gerçek dallanma (fan-out, "ya/ya da"). `case`, `when` ya da `seq` taşıyan kenar belirsiz sayılmaz |
+| `-> "x" seq=1` / `-> "y" seq=2` | sıralı adımlar ("hepsi sırayla"): purge zinciri, tick'in üç taraması. Dallanma değil; aynı node'da tekrar eden `seq` → `duplicate_seq` |
+| `-> outcome="toast: hatalı şifre" [when=] [case=]` | hedefsiz `->`: guard'lı/etiketli node'suz son (toast, log). `returns`/`check` outcome'unun düz kenar karşılığı |
 | `on "node.id" -> "x" [when=] [case=]` | olay dinleme; hedef `event` ya da herhangi bir node (state'e giriş de olaydır). Yalnız `event`'ler dinlenerek erişilebilir olur |
 | `calls "call.id"` | action → call |
 | `returns 202 -> "x"` / `returns 200 case="pr" -> "x"` / `returns 409 code="..." -> "x"` | call çıkışları; aynı status birden çok sonuca `case` ile ayrılır |
 | `returns 409 code="..." outcome="toast: volume in use"` | node'suz terminal çıkış (toast, log satırı). UI'da yaprak, aday değil |
 | `check "name" fail=409 code="..." [-> "x" \| outcome="..."]` | ön kontrol; `->` yoksa fail hedefi check tanımındaki **varsayılan**, kullanımdaki `->` onu ezer |
-| `requires "perm.id" [-> "x"]` | izin; `perm` tanımındaki `deny` fail kodu, `fail_to` varsayılan hedef |
+| `requires "perm.id" [fail=404 code="..."] [-> "x" \| outcome="..."]` | izin; `perm` tanımındaki `deny` fail kodu, `fail_to` varsayılan hedef; kullanım `fail=`/`code=` ile ezer (registry'nin 404 NAME_UNKNOWN dönmesi gibi) |
 | `sets "var.id" "+1"` / `sets "retry" "0"` | değişken yazımı; değer string, yorumlanmaz |
 
 Aynı hedefe giden birden çok kenar UI'da tek kartta birleşir, etiketler yığılır.
 
+**Dış girişler (`entry=`).** UI'sı olmayan yönetim/CLI uçları için sahte state açılmaz: `call ... entry="cli"`
+(ya da `api`) node'u dış istemcinin doğrudan çağırdığı giriş sayar; erişilebilirlik oradan başlar,
+`too_many_roots` sayımına girmez. `root` kullanıcı/sistem girişleri (login, webhook, tick) içindir.
+
+**Olay konvansiyonu.** `event` node'undan `->` çıkmaz (`event_has_transition`): olay yalnız `on` ile
+tüketilir. Teslimat altyapısı (emit → SSE → `ui.events.received`) grafta bir kez, kendi zincirinde
+modellenir; domain olayından UI'ya doğrudan kenar çizilmez.
+
 **Yerel sayaçlar.** Guard'daki noktasız isim (`retry`, `attempts`) tanımlı bir `var` değilse yereldir:
-`var` tanımı istemez, `vars` dosyasına girmez; yalnız aynı grupta (ilk iki segment) bir `sets` olmalı
-(`local_var_never_set`). Noktalı isimler ve tanımlı olanlar (`role`) globaldir, `var` ister.
+`var` tanımı istemez, `vars` dosyasına girmez; yalnız aynı kapsamda bir `sets` olmalı
+(`local_var_never_set`). Kapsam = ID'nin son noktaya kadarki öneki: `restore.snapshot` ile
+`restore.applying` aynı kapsam (`restore`), `deploy.rolling.retry` için `deploy.rolling`. Noktalı isimler ve tanımlı olanlar (`role`) globaldir, `var` ister.
 Global `var` yalnız gerçekten dış kaynaklı ya da gruplar arası okunanlar için.
 
 ## 4. Format (KDL)
@@ -186,16 +197,19 @@ Kurallar:
 | `requires` edilen `perm` yok (`unknown_perm`) | hata |
 | Okunan ama hiç `sets`/`source` olmayan `var` | hata |
 | Yazılan ama hiç okunmayan `var` | uyarı |
-| Birden fazla `when`'siz **ve** `case`'siz `->` (`ambiguous_transition`) | uyarı (belirsizlik) |
+| Birden fazla `when`'siz, `case`'siz **ve** `seq`'siz `->` (`ambiguous_transition`) | uyarı (belirsizlik) |
+| Aynı node'da tekrar eden `case=` / `seq=` (`duplicate_case`, `duplicate_seq`) | uyarı |
+| `event` node'undan `->`/`calls`/`returns` çıkıyor (`event_has_transition`) | uyarı |
 | `on` hedefi hiç yok (`unknown_event`) | uyarı |
 | `check`/`perm` tanımı var, hiç kullanılmıyor | uyarı |
 | Root'un giren kenarı var (`root_has_incoming`) | uyarı (uydurma root freni) |
-| Root sayısı `max_roots` üstü (`too_many_roots`) | uyarı |
-| `src=` dosyası yok / sembol dosyada geçmiyor (`src_missing`, `src_symbol_missing`) | uyarı |
+| Periyodik olmayan (`every`'siz) root sayısı `max_roots` üstü (`too_many_roots`) | uyarı |
+| `src=` dosyası yok / sembol dosyada tam kelime olarak geçmiyor / kod dosyasına sembolsüz-satırsız işaret (`src_missing`, `src_symbol_missing`, `src_symbol_unchecked`) | uyarı |
 | `desc` eksik | uyarı |
 
-`validate --prefix deploy` yalnız o namespace'i (ID ya da dosya öneki), `--summary` kategori ×
-namespace tablosunu verir; paralel çalışan ajanlar kendi hatalarını kendileri ayıklar.
+`validate --prefix deploy` yalnız o namespace'i (ID ya da dosya öneki), `--summary [--depth 2]` kategori ×
+namespace tablosunu verir (`--depth 2`: `api.deploys` ile `api.auth` ayrı sütun); paralel çalışan
+ajanlar kendi hatalarını kendileri ayıklar.
 
 CI: `duflow validate` sıfır hata ile geçmeli.
 
@@ -205,7 +219,7 @@ Rust, `clap`, `kdl-rs`, `petgraph`. Tüm komutlar `--json` alır. Exit code: 0 o
 
 | Komut | İş |
 |---|---|
-| `duflow validate [--prefix ns ...] [--summary] [--no-src]` | §5 |
+| `duflow validate [--prefix ns ...] [--summary [--depth n]] [--no-src]` | §5 |
 | `duflow brief <id> [--depth 1]` | AI için tek parça markdown: nasıl gelinir (root'tan en kısa 1-2 yol), okuduğu/yazdığı var'lar, dinlediği event'ler, çıkışları, check'leri, dosya:satır. AI'ın ilk çağrısı budur. |
 | `duflow prereq <id>` | Geriye BFS: bu node'a gelmek için geçilmesi gereken check'ler ve sağlanması gereken guard'lar, zincir halinde. |
 | `duflow path <a> <b> [--all --max 5]` | İki node arası yollar. |
@@ -213,15 +227,16 @@ Rust, `clap`, `kdl-rs`, `petgraph`. Tüm komutlar `--json` alır. Exit code: 0 o
 | `duflow var <id>` | Kim yazıyor, kim okuyor. |
 | `duflow perm [<id>]` | İzinler; tek izin verilirse onu `requires` eden uçlar ("bu uca kim erişir"). |
 | `duflow search <q>` | ID/desc/check/var üstünde fuzzy. |
+| `duflow ls [--kind k] [--layer l] [--prefix p ...] [--attr k[=v]] [--no-attr k]` | Liste; `--kind call --no-attr method` sahte call avı. |
 | `duflow add <kind> <id> [attr...]` | Dosyaya yazar, yorumları korur. `kind`: node türleri + `var check root perm`. |
-| `duflow edit <id> <op>...` | `--set k=v`, `--kind call` (tür değişir, çocuklar kalır), `--child '<kdl>'`, `--rm-edge x`, `--rm-child name:arg`. Tanımlar (var/check/root/perm) da `--set` alır. |
+| `duflow edit <id> <op>...` | `--set k=v`, `--kind call` (tür değişir, çocuklar kalır), `--child '<kdl>'`, `--rm-edge x`, `--rm-child name:arg`. Tanımlar (var/check/root/perm) da `--set` alır. **Silmeler eklemelerden önce uygulanır**: aynı komutta "kenarı sil, `case=` ile geri ekle" olur. |
 | `duflow rename <old> <new>` | Tüm referanslar + dosya taşıma. |
-| `duflow rm <id> [--force]` | Node ya da tanım. Referans varsa reddeder; `--force` **referansları da siler** (kenarlar, `sets`, check/requires kullanımları, root/view satırı). Node'u yeniden yazmak için `rm`+`add` değil `edit --kind`. |
+| `duflow rm <id> [--force]` | Node ya da tanım. Referans varsa reddeder; `--force` **referansları da siler** (kenarlar, `sets`, check/requires kullanımları, root/view satırı, check/perm tanımındaki `-> x`/`fail_to`, var için `reads` kelimesi). Node'u yeniden yazmak için `rm`+`add` değil `edit --kind`. |
 | `duflow apply - [--dry-run] [--continue-on-error]` | stdin'den JSON işlem listesi. Atomik: bir op düşerse hiçbir şey yazılmaz, **tüm** düşen op'lar indeksiyle listelenir; `--dry-run` aynı listeyi verir. |
 
 Yazma kilidi: `Workspace` açılırken dizin başına flock (`$TMPDIR/duflow-lock/<hash>.lock`), commit'e
 kadar tutulur; paralel ajanlar birbirini ezmez, sıraya girer.
-| `duflow diff <rev1> [<rev2>]` | Git rev'leri arası graph diff (eklenen/silinen/değişen node ve kenar; ID bazlı). |
+| `duflow diff <rev1> [<rev2>] [--stat]` | Git rev'leri (ya da flows dizini yolları, gitignore'lu flows için kopya) arası graph diff (eklenen/silinen/değişen node ve kenar; ID bazlı). `--stat`: namespace bazlı sayılar; ajan kaybettiği kenarı görür. |
 | `duflow ui build [-o dist]` | Statik site: tek `index.html`, graph JSON gömülü. |
 | `duflow ui serve` | watch + reload. `?diff=a..b` ile diff overlay. |
 | `duflow fmt` | Kanonik biçim. |

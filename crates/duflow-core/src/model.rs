@@ -70,6 +70,10 @@ pub struct Edge {
     /// `case` ya da `when` taşıyan kenar `ambiguous_transition` sayılmaz.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub case: Option<String>,
+    /// Sıra numarası (`seq=1`): dallanma değil, hepsi sırayla koşan adımlar. `seq` taşıyan
+    /// kenar da `ambiguous_transition` sayılmaz; aynı node'da tekrar eden `seq` uyarıdır.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub seq: Option<u32>,
     pub line: usize,
 }
 
@@ -94,6 +98,9 @@ impl Edge {
         let mut parts: Vec<String> = vec![];
         if !base.is_empty() {
             parts.push(base);
+        }
+        if let Some(n) = self.seq {
+            parts.push(format!("#{n}"));
         }
         if let Some(c) = &self.case {
             parts.push(format!("case {c}"));
@@ -134,7 +141,8 @@ pub struct CheckUse {
     pub line: usize,
 }
 
-/// `returns 409 code="x" outcome="..."`: hedef node'u olmayan terminal çıkış.
+/// Hedef node'u olmayan terminal çıkış: `returns 409 code="x" outcome="..."` ya da
+/// `-> outcome="..." when="..."` (`arrow`: `->` ile yazıldı, status/code yok).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Outcome {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -142,17 +150,35 @@ pub struct Outcome {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
     pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub when: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub case: Option<String>,
+    #[serde(default)]
+    pub arrow: bool,
     pub line: usize,
 }
 
 impl Outcome {
     pub fn label(&self) -> String {
-        match (self.status, &self.code) {
+        let base = match (self.status, &self.code) {
             (Some(s), Some(c)) => format!("{s} {c}"),
             (Some(s), None) => s.to_string(),
             (None, Some(c)) => c.clone(),
+            (None, None) if self.arrow => String::new(),
             (None, None) => "ok".into(),
+        };
+        let mut parts: Vec<String> = vec![];
+        if !base.is_empty() {
+            parts.push(base);
         }
+        if let Some(c) = &self.case {
+            parts.push(format!("case {c}"));
+        }
+        if let Some(w) = &self.when {
+            parts.push(format!("when {w}"));
+        }
+        parts.join(" · ")
     }
 }
 
@@ -374,4 +400,16 @@ pub fn file_for_id(
 /// UI gruplama anahtarı: ilk iki segment (ya da tek segment).
 pub fn group_of(id: &str) -> String {
     id.split('.').take(2).collect::<Vec<_>>().join(".")
+}
+
+/// Yerel sayaç kapsamı: son noktaya kadarki prefix (`restore.snapshot` → `restore`,
+/// `deploy.rolling.retry` → `deploy.rolling`). Noktasız ID kendi kapsamıdır.
+pub fn local_group(id: &str) -> &str {
+    id.rsplit_once('.').map(|(p, _)| p).unwrap_or(id)
+}
+
+/// `entry="api"` gibi bir attr taşıyan node dış istemcinin doğrudan çağırdığı giriştir:
+/// root sayılmadan erişilebilir kabul edilir, `too_many_roots` sayımına girmez.
+pub fn is_entry(n: &Node) -> bool {
+    n.attrs.get("entry").is_some_and(|v| !v.is_empty())
 }

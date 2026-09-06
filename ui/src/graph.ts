@@ -1,4 +1,4 @@
-// Graf verisi ve saf sorgular. duflow-core export şeması (schema 2).
+// Graf verisi ve saf sorgular. duflow-core export şeması (schema 3).
 
 export type Kind = 'state' | 'action' | 'call' | 'event'
 
@@ -26,6 +26,8 @@ export interface Data {
   nodes: Node[]; vars: VarDef[]; checks: CheckDef[]; roots: string[]
   /** periyodik root'lar: id → "30s" */
   every: Record<string, string>
+  /** `entry="api"` node'ları: root olmayan dış girişler, id → etiket */
+  entries: Record<string, string>
   perms: PermDef[]; views: ViewDef[]; diff?: DiffData
 }
 
@@ -49,6 +51,7 @@ export class Graph {
   checks = new Map<string, CheckDef>()
   roots: string[]
   every: Record<string, string>
+  entries: Record<string, string>
   perms = new Map<string, PermDef>()
   layers: string[]
   diff?: DiffData
@@ -69,6 +72,7 @@ export class Graph {
     for (const c of data.checks) this.checks.set(c.id, c)
     this.roots = data.roots
     this.every = data.every ?? {}
+    this.entries = data.entries ?? {}
     for (const p of data.perms ?? []) this.perms.set(p.id, p)
     this.layers = data.project.layers
     this.diff = data.diff
