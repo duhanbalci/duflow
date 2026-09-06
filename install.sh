@@ -46,4 +46,17 @@ case ":$PATH:" in
   *":$dir:"*) ;;
   *) echo "note: $dir is not in PATH" ;;
 esac
-echo "shell completion: duflow completions fish|zsh|bash"
+
+# Shell completion: `curl | sh` altında stdin script'in kendisi; soruyu /dev/tty'den oku
+shell=$(basename "${SHELL:-}")
+case "$shell" in fish|zsh|bash) ;; *) shell="" ;; esac
+if [ -n "$shell" ] && ( : < /dev/tty ) 2>/dev/null; then
+  printf "install %s completions? [Y/n] " "$shell" > /dev/tty
+  read -r ans < /dev/tty || ans=n
+  case "$ans" in
+    ""|y|Y|yes) "$dir/duflow" completions "$shell" ;;
+    *) echo "skipped; later: duflow completions $shell" ;;
+  esac
+else
+  echo "shell completion: duflow completions fish|zsh|bash"
+fi
