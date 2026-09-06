@@ -18,11 +18,19 @@ pub fn idents(expr: &str) -> Vec<String> {
         }
         if c.is_ascii_alphabetic() || c == '_' {
             let start = i;
-            while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_' || chars[i] == '.' || chars[i] == ':') {
+            while i < chars.len()
+                && (chars[i].is_ascii_alphanumeric()
+                    || chars[i] == '_'
+                    || chars[i] == '.'
+                    || chars[i] == ':')
+            {
                 i += 1;
             }
             let word: String = chars[start..i].iter().collect();
-            if !matches!(word.as_str(), "true" | "false" | "null" | "and" | "or" | "not") {
+            if !matches!(
+                word.as_str(),
+                "true" | "false" | "null" | "and" | "or" | "not"
+            ) {
                 out.push(word);
             }
             continue;
@@ -44,7 +52,10 @@ pub fn idents(expr: &str) -> Vec<String> {
 mod tests {
     #[test]
     fn extracts_idents() {
-        assert_eq!(super::idents(r#"deploy.attempts >= 3 && role == "org_admin" || !service.frozen"#), vec!["deploy.attempts", "role", "service.frozen"]);
+        assert_eq!(
+            super::idents(r#"deploy.attempts >= 3 && role == "org_admin" || !service.frozen"#),
+            vec!["deploy.attempts", "role", "service.frozen"]
+        );
         assert_eq!(super::idents("true"), Vec::<String>::new());
     }
 }

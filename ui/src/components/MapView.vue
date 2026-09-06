@@ -88,7 +88,7 @@ window.addEventListener('resize', draw)
     <div class="crumbs">
       <button @click="level = null" :class="{ on: !level }">{{ graph?.data.project.name }}</button>
       <template v-if="level"><span>›</span><button class="on">{{ level }}</button></template>
-      <span class="hint">grup kartına tıkla: içine gir · node seviyesinde Walk başlar</span>
+      <span class="hint">click a group card to enter · Walk starts at node level</span>
     </div>
     <svg ref="svg" class="wires"></svg>
     <div class="cols">

@@ -6,15 +6,27 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum ParseError {
-    #[error("{file}:{line}: KDL sözdizimi: {msg}")]
-    Syntax { file: String, line: usize, msg: String },
+    #[error("{file}:{line}: KDL syntax: {msg}")]
+    Syntax {
+        file: String,
+        line: usize,
+        msg: String,
+    },
     #[error("{file}:{line}: {msg}")]
-    Shape { file: String, line: usize, msg: String },
+    Shape {
+        file: String,
+        line: usize,
+        msg: String,
+    },
 }
 
 /// Bayt ofsetinden satır numarası (1 tabanlı).
 pub fn line_of(src: &str, offset: usize) -> usize {
-    src[..offset.min(src.len())].bytes().filter(|&b| b == b'\n').count() + 1
+    src[..offset.min(src.len())]
+        .bytes()
+        .filter(|&b| b == b'\n')
+        .count()
+        + 1
 }
 
 struct Ctx<'a> {
@@ -24,7 +36,11 @@ struct Ctx<'a> {
 
 impl Ctx<'_> {
     fn err(&self, node: &KdlNode, msg: impl Into<String>) -> ParseError {
-        ParseError::Shape { file: self.file.into(), line: line_of(self.src, node.span().offset()), msg: msg.into() }
+        ParseError::Shape {
+            file: self.file.into(),
+            line: line_of(self.src, node.span().offset()),
+            msg: msg.into(),
+        }
     }
     fn line(&self, node: &KdlNode) -> usize {
         line_of(self.src, node.span().offset())
@@ -43,11 +59,18 @@ fn val_str(v: &KdlValue) -> String {
 
 /// Konumsal argümanlar (isimsiz entry'ler).
 fn args(node: &KdlNode) -> Vec<&KdlValue> {
-    node.entries().iter().filter(|e| e.name().is_none()).map(|e| e.value()).collect()
+    node.entries()
+        .iter()
+        .filter(|e| e.name().is_none())
+        .map(|e| e.value())
+        .collect()
 }
 
 fn prop<'a>(node: &'a KdlNode, name: &str) -> Option<&'a KdlValue> {
-    node.entries().iter().find(|e| e.name().map(|n| n.value()) == Some(name)).map(|e| e.value())
+    node.entries()
+        .iter()
+        .find(|e| e.name().map(|n| n.value()) == Some(name))
+        .map(|e| e.value())
 }
 
 fn prop_str(node: &KdlNode, name: &str) -> Option<String> {
@@ -55,7 +78,9 @@ fn prop_str(node: &KdlNode, name: &str) -> Option<String> {
 }
 
 fn prop_u16(node: &KdlNode, name: &str) -> Option<u16> {
-    prop(node, name).and_then(|v| v.as_integer()).and_then(|i| u16::try_from(i).ok())
+    prop(node, name)
+        .and_then(|v| v.as_integer())
+        .and_then(|i| u16::try_from(i).ok())
 }
 
 /// `... -> "x"` kuyruğunu bulur: `->` argümanından sonraki string.
@@ -66,7 +91,9 @@ fn arrow_target(node: &KdlNode) -> Option<String> {
 }
 
 fn child_str(node: &KdlNode, name: &str) -> Option<String> {
-    node.children()?.get(name).and_then(|c| args(c).first().map(|v| val_str(v)))
+    node.children()?
+        .get(name)
+        .and_then(|c| args(c).first().map(|v| val_str(v)))
 }
 
 pub fn parse_file(file: &str, src: &str) -> Result<FileItems, ParseError> {
@@ -74,9 +101,18 @@ pub fn parse_file(file: &str, src: &str) -> Result<FileItems, ParseError> {
         let (line, msg) = e
             .diagnostics
             .first()
-            .map(|d| (line_of(src, d.span.offset()), d.message.clone().unwrap_or_else(|| "geçersiz KDL".into())))
-            .unwrap_or((1, "geçersiz KDL".into()));
-        ParseError::Syntax { file: file.into(), line, msg }
+            .map(|d| {
+                (
+                    line_of(src, d.span.offset()),
+                    d.message.clone().unwrap_or_else(|| "invalid KDL".into()),
+                )
+            })
+            .unwrap_or((1, "invalid KDL".into()));
+        ParseError::Syntax {
+            file: file.into(),
+            line,
+            msg,
+        }
     })?;
     let cx = Ctx { file, src };
     let mut items = FileItems::default();
@@ -94,8 +130,8 @@ pub fn parse_file(file: &str, src: &str) -> Result<FileItems, ParseError> {
             }),
             "view" => items.views.push(ViewDef {
                 id: first_id(&cx, node)?,
-                from: prop_str(node, "from").ok_or_else(|| cx.err(node, "view için `from` gerekli"))?,
-                to: prop_str(node, "to").ok_or_else(|| cx.err(node, "view için `to` gerekli"))?,
+                from: prop_str(node, "from").ok_or_else(|| cx.err(node, "view requires `from`"))?,
+                to: prop_str(node, "to").ok_or_else(|| cx.err(node, "view requires `to`"))?,
                 desc: prop_str(node, "desc").or_else(|| child_str(node, "desc")),
                 file: file.into(),
                 line: cx.line(node),
@@ -110,7 +146,7 @@ pub fn parse_file(file: &str, src: &str) -> Result<FileItems, ParseError> {
                 }
                 items.config = Some(cfg);
             }
-            other => return Err(cx.err(node, format!("bilinmeyen üst düzey node `{other}`"))),
+            other => return Err(cx.err(node, format!("unknown top-level node `{other}`"))),
         }
     }
     Ok(items)
@@ -121,14 +157,22 @@ fn first_id(cx: &Ctx, node: &KdlNode) -> Result<String, ParseError> {
         .first()
         .and_then(|v| v.as_string())
         .map(String::from)
-        .ok_or_else(|| cx.err(node, format!("`{}` için ilk argüman ID olmalı", node.name().value())))
+        .ok_or_else(|| {
+            cx.err(
+                node,
+                format!("first argument of `{}` must be an ID", node.name().value()),
+            )
+        })
 }
 
 fn parse_node(cx: &Ctx, node: &KdlNode) -> Result<Node, ParseError> {
     let kind = Kind::parse(node.name().value()).unwrap();
     let id = first_id(cx, node)?;
     if !is_valid_id(&id) {
-        return Err(cx.err(node, format!("geçersiz ID `{id}` (izin: a-z 0-9 _ ve nokta)")));
+        return Err(cx.err(
+            node,
+            format!("invalid ID `{id}` (allowed: a-z 0-9 _ and dot)"),
+        ));
     }
     let mut n = Node {
         id,
@@ -150,7 +194,9 @@ fn parse_node(cx: &Ctx, node: &KdlNode) -> Result<Node, ParseError> {
             }
         }
     }
-    let Some(children) = node.children() else { return Ok(n) };
+    let Some(children) = node.children() else {
+        return Ok(n);
+    };
     for c in children.nodes() {
         let line = cx.line(c);
         let cname = c.name().value();
@@ -159,38 +205,87 @@ fn parse_node(cx: &Ctx, node: &KdlNode) -> Result<Node, ParseError> {
             "desc" => n.desc = args(c).first().map(|v| val_str(v)),
             "doc" => n.doc = args(c).first().map(|v| val_str(v)),
             "->" => {
-                let to = args(c).first().map(|v| val_str(v)).ok_or_else(|| cx.err(c, "`->` hedef ister"))?;
-                n.edges.push(Edge { to, kind: EdgeKind::Plain, when, line });
+                let to = args(c)
+                    .first()
+                    .map(|v| val_str(v))
+                    .ok_or_else(|| cx.err(c, "`->` hedef ister"))?;
+                n.edges.push(Edge {
+                    to,
+                    kind: EdgeKind::Plain,
+                    when,
+                    line,
+                });
             }
             "on" => {
-                let event = args(c).first().map(|v| val_str(v)).ok_or_else(|| cx.err(c, "`on` olay ID'si ister"))?;
-                let to = arrow_target(c).ok_or_else(|| cx.err(c, "`on \"ev\" -> \"hedef\"` bekleniyor"))?;
-                n.edges.push(Edge { to, kind: EdgeKind::On { event }, when, line });
+                let event = args(c)
+                    .first()
+                    .map(|v| val_str(v))
+                    .ok_or_else(|| cx.err(c, "`on` olay ID'si ister"))?;
+                let to = arrow_target(c)
+                    .ok_or_else(|| cx.err(c, "`on \"ev\" -> \"hedef\"` bekleniyor"))?;
+                n.edges.push(Edge {
+                    to,
+                    kind: EdgeKind::On { event },
+                    when,
+                    line,
+                });
             }
             "returns" => {
                 // `returns 202 code="x" -> "h"` ya da `returns ok -> "h"`
-                let first = args(c).first().copied().ok_or_else(|| cx.err(c, "`returns <status|etiket> -> \"hedef\"` bekleniyor"))?;
+                let first = args(c).first().copied().ok_or_else(|| {
+                    cx.err(c, "`returns <status|etiket> -> \"hedef\"` bekleniyor")
+                })?;
                 let (status, tag) = match first {
-                    KdlValue::Integer(i) => (Some(u16::try_from(*i).map_err(|_| cx.err(c, "geçersiz status"))?), None),
+                    KdlValue::Integer(i) => (
+                        Some(u16::try_from(*i).map_err(|_| cx.err(c, "invalid status"))?),
+                        None,
+                    ),
                     KdlValue::String(s) if s != "->" => (None, Some(s.clone())),
-                    _ => return Err(cx.err(c, "`returns` ilk argümanı status ya da etiket olmalı")),
+                    _ => {
+                        return Err(
+                            cx.err(c, "first argument of `returns` must be a status or a tag")
+                        );
+                    }
                 };
-                let to = arrow_target(c).ok_or_else(|| cx.err(c, "`returns` için `-> \"hedef\"` gerekli"))?;
+                let to = arrow_target(c)
+                    .ok_or_else(|| cx.err(c, "`returns` requires `-> \"target\"`"))?;
                 let code = prop_str(c, "code").or(tag);
-                n.edges.push(Edge { to, kind: EdgeKind::Returns { status, code }, when, line });
+                n.edges.push(Edge {
+                    to,
+                    kind: EdgeKind::Returns { status, code },
+                    when,
+                    line,
+                });
             }
             "calls" => {
                 for v in args(c) {
-                    n.edges.push(Edge { to: val_str(v), kind: EdgeKind::Calls, when: when.clone(), line });
+                    n.edges.push(Edge {
+                        to: val_str(v),
+                        kind: EdgeKind::Calls,
+                        when: when.clone(),
+                        line,
+                    });
                 }
             }
             "check" => {
-                let name = args(c).first().map(|v| val_str(v)).ok_or_else(|| cx.err(c, "`check` ad ister"))?;
-                n.checks.push(CheckUse { name, fail: prop_u16(c, "fail"), code: prop_str(c, "code"), to: arrow_target(c), line });
+                let name = args(c)
+                    .first()
+                    .map(|v| val_str(v))
+                    .ok_or_else(|| cx.err(c, "`check` ad ister"))?;
+                n.checks.push(CheckUse {
+                    name,
+                    fail: prop_u16(c, "fail"),
+                    code: prop_str(c, "code"),
+                    to: arrow_target(c),
+                    line,
+                });
             }
             "sets" => {
                 let a = args(c);
-                let var = a.first().map(|v| val_str(v)).ok_or_else(|| cx.err(c, "`sets \"var\" \"değer\"` bekleniyor"))?;
+                let var = a
+                    .first()
+                    .map(|v| val_str(v))
+                    .ok_or_else(|| cx.err(c, "expected `sets \"var\" \"value\"`"))?;
                 let value = a.get(1).map(|v| val_str(v)).unwrap_or_default();
                 n.sets.push(SetVar { var, value, line });
             }
@@ -199,7 +294,7 @@ fn parse_node(cx: &Ctx, node: &KdlNode) -> Result<Node, ParseError> {
                 if let Some(v) = args(c).first() {
                     n.attrs.insert(other.into(), val_str(v));
                 } else {
-                    return Err(cx.err(c, format!("bilinmeyen çocuk `{other}`")));
+                    return Err(cx.err(c, format!("unknown child `{other}`")));
                 }
             }
         }
@@ -218,14 +313,16 @@ fn default_layer(kind: Kind) -> &'static str {
 fn parse_var(cx: &Ctx, node: &KdlNode) -> Result<VarDef, ParseError> {
     let id = first_id(cx, node)?;
     if !is_valid_id(&id) {
-        return Err(cx.err(node, format!("geçersiz var ID `{id}`")));
+        return Err(cx.err(node, format!("invalid var ID `{id}`")));
     }
     Ok(VarDef {
         id,
         ty: prop_str(node, "type").unwrap_or_else(|| "string".into()),
         desc: prop_str(node, "desc").or_else(|| child_str(node, "desc")),
         source: prop_str(node, "source"),
-        values: prop_str(node, "values").map(|s| s.split_whitespace().map(String::from).collect()).unwrap_or_default(),
+        values: prop_str(node, "values")
+            .map(|s| s.split_whitespace().map(String::from).collect())
+            .unwrap_or_default(),
         file: cx.file.into(),
         line: cx.line(node),
     })
@@ -234,12 +331,14 @@ fn parse_var(cx: &Ctx, node: &KdlNode) -> Result<VarDef, ParseError> {
 fn parse_check(cx: &Ctx, node: &KdlNode) -> Result<CheckDef, ParseError> {
     let id = first_id(cx, node)?;
     if !is_valid_check_id(&id) {
-        return Err(cx.err(node, format!("geçersiz check ID `{id}`")));
+        return Err(cx.err(node, format!("invalid check ID `{id}`")));
     }
     Ok(CheckDef {
         id,
         desc: prop_str(node, "desc").or_else(|| child_str(node, "desc")),
-        reads: prop_str(node, "reads").map(|s| s.split_whitespace().map(String::from).collect()).unwrap_or_default(),
+        reads: prop_str(node, "reads")
+            .map(|s| s.split_whitespace().map(String::from).collect())
+            .unwrap_or_default(),
         fail_to: arrow_target(node).or_else(|| prop_str(node, "fail_to")),
         file: cx.file.into(),
         line: cx.line(node),
@@ -281,7 +380,13 @@ view "v" from="ui.login" to="deploy.done"
         let call = &it.nodes[1];
         assert_eq!(call.attrs["method"], "POST");
         assert_eq!(call.checks[1].to.as_deref(), Some("ui.toast"));
-        assert!(matches!(call.edges[0].kind, EdgeKind::Returns { status: Some(202), .. }));
+        assert!(matches!(
+            call.edges[0].kind,
+            EdgeKind::Returns {
+                status: Some(202),
+                ..
+            }
+        ));
         assert_eq!(it.vars[1].values, vec!["admin", "member"]);
         assert_eq!(it.checks[0].reads, vec!["role"]);
         assert_eq!(it.roots[0].id, "ui.login");

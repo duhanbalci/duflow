@@ -75,7 +75,16 @@ pub fn export<'a>(g: &'a Graph, diff: Option<&GraphDiff>) -> Export<'a> {
             desc: n.desc.as_deref().unwrap_or(""),
             doc: n.doc.as_deref(),
             attrs: &n.attrs,
-            out: g.outgoing(&n.id).iter().map(|e| ExportEdge { to: &e.to, label: &e.label, class: e.class, when: e.when.as_deref() }).collect(),
+            out: g
+                .outgoing(&n.id)
+                .iter()
+                .map(|e| ExportEdge {
+                    to: &e.to,
+                    label: &e.label,
+                    class: e.class,
+                    when: e.when.as_deref(),
+                })
+                .collect(),
             checks: n.checks.iter().collect(),
             sets: n.sets.iter().collect(),
             file: format!("{}:{}", n.file, n.line),
@@ -95,17 +104,46 @@ pub fn export<'a>(g: &'a Graph, diff: Option<&GraphDiff>) -> Export<'a> {
             })
             .collect(),
         changed: d.changed.iter().map(|c| c.id.clone()).collect(),
-        edges_removed: d.changed.iter().flat_map(|c| c.edges_removed.iter().map(move |e| (c.id.clone(), e.to.clone(), e.label()))).collect(),
-        edges_added: d.changed.iter().flat_map(|c| c.edges_added.iter().map(move |e| (c.id.clone(), e.to.clone(), e.label()))).collect(),
+        edges_removed: d
+            .changed
+            .iter()
+            .flat_map(|c| {
+                c.edges_removed
+                    .iter()
+                    .map(move |e| (c.id.clone(), e.to.clone(), e.label()))
+            })
+            .collect(),
+        edges_added: d
+            .changed
+            .iter()
+            .flat_map(|c| {
+                c.edges_added
+                    .iter()
+                    .map(move |e| (c.id.clone(), e.to.clone(), e.label()))
+            })
+            .collect(),
     });
-    Export { schema: SCHEMA_VERSION, project: &g.config, nodes, vars: g.vars.values().collect(), checks: g.checks.values().collect(), roots: g.roots.iter().map(|r| r.id.as_str()).collect(), views: g.views.iter().collect(), diff }
+    Export {
+        schema: SCHEMA_VERSION,
+        project: &g.config,
+        nodes,
+        vars: g.vars.values().collect(),
+        checks: g.checks.values().collect(),
+        roots: g.roots.iter().map(|r| r.id.as_str()).collect(),
+        views: g.views.iter().collect(),
+        diff,
+    }
 }
 
 /// Diff overlay için: eski grafta silinen node'lara giden kenarları doldurur.
 pub fn fill_removed_sources(exp: &mut Export<'_>, old: &Graph) {
     if let Some(d) = exp.diff.as_mut() {
         for r in &mut d.removed {
-            r.from = old.incoming_edges(&r.id).into_iter().map(|e| (e.from.clone(), e.label.clone())).collect();
+            r.from = old
+                .incoming_edges(&r.id)
+                .into_iter()
+                .map(|e| (e.from.clone(), e.label.clone()))
+                .collect();
         }
         // silinen kenarlar da: eski grafta var, yenide yok — changed listesinde zaten
     }

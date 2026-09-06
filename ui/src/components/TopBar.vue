@@ -54,11 +54,11 @@ function playView(id: string) {
 
     <div class="search" @focusout="closeLater">
       <span class="ico">⌕</span>
-      <input ref="input" v-model="q" placeholder="node, check, var ara…" autocomplete="off"
+      <input ref="input" v-model="q" placeholder="search node, check, var…" autocomplete="off"
         @focus="open = true" @input="sel = 0; open = true" @keydown="onKey" />
       <kbd>⌘K</kbd>
       <div v-if="open && q.trim()" class="pal">
-        <div v-if="!hits.length" class="none">eşleşme yok</div>
+        <div v-if="!hits.length" class="none">no matches</div>
         <template v-for="(h, i) in hits" :key="h.kind + h.id">
           <div v-if="i === 0 || hits[i - 1].kind !== h.kind" class="sec">{{ h.kind }}</div>
           <div class="it" :class="{ sel: i === sel }" :data-layer="h.layer" @mousedown.prevent="pick(h)" @mousemove="sel = i">
@@ -72,13 +72,13 @@ function playView(id: string) {
 
     <div class="layers">
       <button v-for="l in graph?.layers" :key="l" class="lay" :data-layer="l" :class="{ off: state.hiddenLayers.has(l) }"
-        :title="`${l} katmanını göster/gizle`" @click="toggleLayer(l)">
+        :title="`show/hide ${l} layer`" @click="toggleLayer(l)">
         <span class="dot"></span>{{ l }}
       </button>
     </div>
 
     <label class="role" v-if="roles.length">
-      <span>rol</span>
+      <span>role</span>
       <select v-model="state.role" @change="state.vars['role'] = state.role || '—'">
         <option value="">hepsi</option>
         <option v-for="r in roles" :key="r" :value="r">{{ r }}</option>
@@ -92,16 +92,16 @@ function playView(id: string) {
 
     <div class="replay">
       <select class="root" :value="''" @change="startAt(($event.target as HTMLSelectElement).value); ($event.target as HTMLSelectElement).value = ''">
-        <option value="" disabled>root'tan başla…</option>
+        <option value="" disabled>start from root…</option>
         <option v-for="r in rootOptions" :key="r" :value="r">{{ r }}</option>
       </select>
       <select v-if="views.length" class="root" :value="''" @change="playView(($event.target as HTMLSelectElement).value); ($event.target as HTMLSelectElement).value = ''">
-        <option value="" disabled>view oynat…</option>
+        <option value="" disabled>play view…</option>
         <option v-for="v in views" :key="v.id" :value="v.id">{{ v.id }}</option>
       </select>
       <span v-if="state.replay" class="step mono">{{ state.replay.idx }}/{{ state.replay.path.length - 1 }}</span>
-      <button @click="stopReplay(); back()" title="←">← geri</button>
-      <button class="primary" @click="replayToCurrent">{{ state.replay ? '⏸ durdur' : '▶ buraya nasıl gelinir' }}</button>
+      <button @click="stopReplay(); back()" title="←">← back</button>
+      <button class="primary" @click="replayToCurrent">{{ state.replay ? '⏸ stop' : '▶ how to get here' }}</button>
     </div>
   </header>
 </template>

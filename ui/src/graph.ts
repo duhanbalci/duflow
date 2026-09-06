@@ -210,6 +210,6 @@ export async function loadData(): Promise<Data> {
   const inline = (window as unknown as { __DUFLOW__: Data | null }).__DUFLOW__
   if (inline) return inline
   const r = await fetch('/duflow.json')
-  if (!r.ok) throw new Error('duflow.json yok; `duflow export > ui/public/duflow.json`')
+  if (!r.ok) throw new Error('duflow.json missing; run `duflow export > ui/public/duflow.json`')
   return r.json()
 }

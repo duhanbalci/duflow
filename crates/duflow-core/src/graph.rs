@@ -61,7 +61,11 @@ impl Graph {
         let mut sources = vec![];
         for f in files {
             let src = std::fs::read_to_string(&f).map_err(|e| LoadError::Io(f.clone(), e))?;
-            let rel = f.strip_prefix(dir).unwrap_or(&f).to_string_lossy().replace('\\', "/");
+            let rel = f
+                .strip_prefix(dir)
+                .unwrap_or(&f)
+                .to_string_lossy()
+                .replace('\\', "/");
             sources.push((rel, src));
         }
         Graph::from_sources(&sources)
@@ -115,7 +119,10 @@ impl Graph {
         for id in ids {
             let edges = self.resolved_edges(&id);
             for (i, e) in edges.iter().enumerate() {
-                self.incoming.entry(e.to.clone()).or_default().push((id.clone(), i));
+                self.incoming
+                    .entry(e.to.clone())
+                    .or_default()
+                    .push((id.clone(), i));
             }
             self.out.insert(id, edges);
         }
@@ -127,17 +134,33 @@ impl Graph {
         let mut out: Vec<ResolvedEdge> = n
             .edges
             .iter()
-            .map(|e| ResolvedEdge { from: id.into(), to: e.to.clone(), label: e.label(), class: e.class(), when: e.when.clone(), line: e.line })
+            .map(|e| ResolvedEdge {
+                from: id.into(),
+                to: e.to.clone(),
+                label: e.label(),
+                class: e.class(),
+                when: e.when.clone(),
+                line: e.line,
+            })
             .collect();
         for c in &n.checks {
-            let to = c.to.clone().or_else(|| self.checks.get(&c.name).and_then(|d| d.fail_to.clone()));
+            let to =
+                c.to.clone()
+                    .or_else(|| self.checks.get(&c.name).and_then(|d| d.fail_to.clone()));
             if let Some(to) = to {
                 let label = match (c.fail, &c.code) {
                     (Some(s), Some(code)) => format!("{} ✗ {s} {code}", c.name),
                     (Some(s), None) => format!("{} ✗ {s}", c.name),
                     _ => format!("{} ✗", c.name),
                 };
-                out.push(ResolvedEdge { from: id.into(), to, label, class: "fail", when: None, line: c.line });
+                out.push(ResolvedEdge {
+                    from: id.into(),
+                    to,
+                    label,
+                    class: "fail",
+                    when: None,
+                    line: c.line,
+                });
             }
         }
         out
@@ -148,7 +171,10 @@ impl Graph {
     }
 
     pub fn incoming_edges(&self, id: &str) -> Vec<&ResolvedEdge> {
-        self.incoming.get(id).map(|v| v.iter().map(|(from, i)| &self.out[from][*i]).collect()).unwrap_or_default()
+        self.incoming
+            .get(id)
+            .map(|v| v.iter().map(|(from, i)| &self.out[from][*i]).collect())
+            .unwrap_or_default()
     }
 
     pub fn root_ids(&self) -> Vec<&str> {
@@ -179,7 +205,18 @@ impl Graph {
 
     /// `on "ev" -> …` ile dinlenen event ID'leri. Dinleyen erişilebilirse event de erişilebilir sayılır.
     pub fn listened_events(&self, id: &str) -> Vec<String> {
-        self.nodes.get(id).map(|n| n.edges.iter().filter_map(|e| match &e.kind { EdgeKind::On { event } => Some(event.clone()), _ => None }).collect()).unwrap_or_default()
+        self.nodes
+            .get(id)
+            .map(|n| {
+                n.edges
+                    .iter()
+                    .filter_map(|e| match &e.kind {
+                        EdgeKind::On { event } => Some(event.clone()),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// `from`'dan `to`'ya en kısa yol (BFS). Bulunamazsa None.
@@ -213,7 +250,10 @@ impl Graph {
 
     /// Herhangi bir root'tan hedefe en kısa yol.
     pub fn path_from_roots(&self, to: &str) -> Option<Vec<String>> {
-        self.root_ids().iter().filter_map(|r| self.shortest_path(r, to)).min_by_key(|p| p.len())
+        self.root_ids()
+            .iter()
+            .filter_map(|r| self.shortest_path(r, to))
+            .min_by_key(|p| p.len())
     }
 
     /// İki node arası en fazla `max` basit yol (DFS, uzunluk sınırı `depth`).
@@ -225,7 +265,16 @@ impl Graph {
         res
     }
 
-    fn dfs_paths(&self, cur: &str, to: &str, max: usize, depth: usize, stack: &mut Vec<String>, on: &mut BTreeSet<String>, res: &mut Vec<Vec<String>>) {
+    fn dfs_paths(
+        &self,
+        cur: &str,
+        to: &str,
+        max: usize,
+        depth: usize,
+        stack: &mut Vec<String>,
+        on: &mut BTreeSet<String>,
+        res: &mut Vec<Vec<String>>,
+    ) {
         if res.len() >= max || stack.len() > depth {
             return;
         }
@@ -237,7 +286,14 @@ impl Graph {
         let mut targets: Vec<&str> = self.outgoing(cur).iter().map(|e| e.to.as_str()).collect();
         targets.dedup();
         for t in targets {
-            let e = ResolvedEdge { from: String::new(), to: t.into(), label: String::new(), class: "", when: None, line: 0 };
+            let e = ResolvedEdge {
+                from: String::new(),
+                to: t.into(),
+                label: String::new(),
+                class: "",
+                when: None,
+                line: 0,
+            };
             if on.insert(e.to.clone()) {
                 stack.push(e.to.clone());
                 self.dfs_paths(&e.to, to, max, depth, stack, on, res);
@@ -249,7 +305,10 @@ impl Graph {
 
     /// Bir değişkeni yazan node'lar.
     pub fn var_writers(&self, var: &str) -> Vec<(&Node, &SetVar)> {
-        self.nodes.values().flat_map(|n| n.sets.iter().filter(|s| s.var == var).map(move |s| (n, s))).collect()
+        self.nodes
+            .values()
+            .flat_map(|n| n.sets.iter().filter(|s| s.var == var).map(move |s| (n, s)))
+            .collect()
     }
 
     /// Bir değişkeni okuyan yerler: (node, açıklama). Guard'lar ve check tanımları.
@@ -274,7 +333,10 @@ impl Graph {
 
     /// Bir check'i kullanan call'lar.
     pub fn check_users(&self, check: &str) -> Vec<&Node> {
-        self.nodes.values().filter(|n| n.checks.iter().any(|c| c.name == check)).collect()
+        self.nodes
+            .values()
+            .filter(|n| n.checks.iter().any(|c| c.name == check))
+            .collect()
     }
 }
 

@@ -44,11 +44,18 @@ pub enum EdgeKind {
     /// `on "event" -> "x"`
     On { event: String },
     /// `returns 202 -> "x"` (code opsiyonel); iç çağrılarda `returns ok -> "x"`
-    Returns { status: Option<u16>, code: Option<String> },
+    Returns {
+        status: Option<u16>,
+        code: Option<String>,
+    },
     /// `calls "call.id"`
     Calls,
     /// `check "name" ... -> "x"`: check başarısız olunca gidilen yer
-    CheckFail { check: String, status: Option<u16>, code: Option<String> },
+    CheckFail {
+        check: String,
+        status: Option<u16>,
+        code: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,7 +98,9 @@ impl Edge {
     pub fn class(&self) -> &'static str {
         match &self.kind {
             EdgeKind::CheckFail { .. } => "fail",
-            EdgeKind::Returns { status: Some(s), .. } if *s >= 400 => "fail",
+            EdgeKind::Returns {
+                status: Some(s), ..
+            } if *s >= 400 => "fail",
             _ if self.when.is_some() => "guard",
             _ => "",
         }
@@ -200,7 +209,10 @@ pub struct ProjectConfig {
 
 impl Default for ProjectConfig {
     fn default() -> Self {
-        Self { name: "flows".into(), layers: vec!["ui".into(), "api".into(), "domain".into()] }
+        Self {
+            name: "flows".into(),
+            layers: vec!["ui".into(), "api".into(), "domain".into()],
+        }
     }
 }
 
@@ -219,14 +231,20 @@ pub struct FileItems {
 pub fn is_valid_id(s: &str) -> bool {
     !s.is_empty()
         && s.split('.').all(|seg| {
-            !seg.is_empty() && seg.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+            !seg.is_empty()
+                && seg
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
         })
 }
 
 pub fn is_valid_check_id(s: &str) -> bool {
     !s.is_empty()
         && s.split([':', '.']).all(|seg| {
-            !seg.is_empty() && seg.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+            !seg.is_empty()
+                && seg
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
         })
 }
 
@@ -236,15 +254,25 @@ pub fn allowed_files(id: &str) -> Vec<String> {
     let segs: Vec<&str> = id.split('.').collect();
     match segs.len() {
         0 | 1 => vec![format!("{id}.kdl")],
-        2 => vec![format!("{}.kdl", segs[0]), format!("{}/{}.kdl", segs[0], segs[1])],
-        _ => vec![format!("{}/{}.kdl", segs[0], segs[1]), format!("{}.kdl", segs[0])],
+        2 => vec![
+            format!("{}.kdl", segs[0]),
+            format!("{}/{}.kdl", segs[0], segs[1]),
+        ],
+        _ => vec![
+            format!("{}/{}.kdl", segs[0], segs[1]),
+            format!("{}.kdl", segs[0]),
+        ],
     }
 }
 
 /// Yeni node için dosya: var olan izinli dosya, yoksa tercih edilen.
 pub fn file_for_id(id: &str, exists: impl Fn(&str) -> bool) -> String {
     let allowed = allowed_files(id);
-    allowed.iter().find(|f| exists(f)).cloned().unwrap_or_else(|| allowed[0].clone())
+    allowed
+        .iter()
+        .find(|f| exists(f))
+        .cloned()
+        .unwrap_or_else(|| allowed[0].clone())
 }
 
 /// UI gruplama anahtarı: ilk iki segment (ya da tek segment).

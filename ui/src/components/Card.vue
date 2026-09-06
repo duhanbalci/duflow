@@ -70,14 +70,14 @@ const isRoot = computed(() => g.value?.roots.includes(props.id))
     <div class="kind">
       <span class="dot"></span>{{ node?.kind }}
       <span v-if="isRoot" class="root">root</span>
-      <span v-if="diffTag" class="chip" :class="diffTag">{{ diffTag === 'added' ? 'yeni' : diffTag === 'removed' ? 'artık yok' : 'değişti' }}</span>
+      <span v-if="diffTag" class="chip" :class="diffTag">{{ diffTag === 'added' ? 'new' : diffTag === 'removed' ? 'removed' : 'changed' }}</span>
     </div>
     <div class="id mono">{{ id }}</div>
     <div class="desc">{{ node?.desc }}</div>
     <div v-if="cand?.labels.length && col !== 'horizon'" class="lbls">
       <span v-for="l in cand.labels" :key="l.label" class="lbl" :class="l.cls">{{ l.label }}</span>
-      <span v-if="cand.guard === 'true'" class="g met">✓ şu an sağlanıyor</span>
-      <span v-else-if="cand.guard === 'false'" class="g unmet">✗ şu an sağlanmıyor</span>
+      <span v-if="cand.guard === 'true'" class="g met">✓ currently met</span>
+      <span v-else-if="cand.guard === 'false'" class="g unmet">✗ currently unmet</span>
     </div>
 
     <template v-if="col === 'now' && full">
@@ -87,7 +87,7 @@ const isRoot = computed(() => g.value?.roots.includes(props.id))
           check {{ c.name }}<template v-if="c.fail"> ✗ {{ c.fail }}</template>
         </span>
         <span v-for="s in full.sets" :key="s.var" class="chip set">sets {{ s.var }} {{ s.value }}</span>
-        <span v-for="ev in listens" :key="ev" class="chip attr">dinler {{ ev }}</span>
+        <span v-for="ev in listens" :key="ev" class="chip attr">listens {{ ev }}</span>
       </div>
       <div class="file mono">{{ full.file }}</div>
       <div v-if="full.doc" class="doc">{{ full.doc }}</div>

@@ -18,7 +18,8 @@ pub fn render(data_json: &str) -> String {
 
 /// Her GET'te grafı yeniden yükleyip render eder. `?diff=a..b` overlay.
 pub fn serve(dir: &Path, addr: &str) -> Result<()> {
-    let listener = TcpListener::bind(addr).with_context(|| format!("{addr} dinlenemedi"))?;
+    let listener =
+        TcpListener::bind(addr).with_context(|| format!("could not listen on {addr}"))?;
     eprintln!("duflow ui: http://{addr}/  (flows: {})", dir.display());
     for stream in listener.incoming() {
         let mut stream = match stream {
@@ -38,12 +39,24 @@ pub fn serve(dir: &Path, addr: &str) -> Result<()> {
             }
         }
         let path = line.split_whitespace().nth(1).unwrap_or("/");
-        let diff = path.split_once("diff=").map(|(_, q)| q.split('&').next().unwrap_or("").to_string()).filter(|s| !s.is_empty());
-        let body = match Graph::load(dir).map_err(anyhow::Error::from).and_then(|g| crate::export_json(dir, &g, diff.as_deref())) {
+        let diff = path
+            .split_once("diff=")
+            .map(|(_, q)| q.split('&').next().unwrap_or("").to_string())
+            .filter(|s| !s.is_empty());
+        let body = match Graph::load(dir)
+            .map_err(anyhow::Error::from)
+            .and_then(|g| crate::export_json(dir, &g, diff.as_deref()))
+        {
             Ok(json) => render(&json),
-            Err(e) => format!("<pre style=\"font:14px monospace;padding:2rem\">duflow: {e:#}</pre>"),
+            Err(e) => {
+                format!("<pre style=\"font:14px monospace;padding:2rem\">duflow: {e:#}</pre>")
+            }
         };
-        let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", body.len());
+        let _ = write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
         let _ = stream.write_all(body.as_bytes());
     }
     Ok(())

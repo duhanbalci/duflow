@@ -206,7 +206,7 @@ const trackStyle = computed(() => ({
       </div>
       <div class="slot past" data-slot="past" :class="{ fading: phase === 'fwd' }">
         <Card v-if="previous" :key="previous" :id="previous" :col="phase === 'back' ? 'now' : 'past'" />
-        <div v-else class="empty">başlangıç</div>
+        <div v-else class="empty">start</div>
       </div>
       <div class="slot now" data-slot="now">
         <CandList v-if="phase === 'back'" :cands="backCands" :selected="backSel" />
@@ -221,7 +221,7 @@ const trackStyle = computed(() => ({
         </template>
         <template v-else>
           <Card v-for="c in horizon.slice(0, HORIZON_MAX)" :key="c.to + (c.via?.id ?? '')" :id="c.to" col="horizon" :cand="c" class="fade" />
-          <div v-if="horizon.length > HORIZON_MAX" class="empty fade">+{{ horizon.length - HORIZON_MAX }} çıkış daha</div>
+          <div v-if="horizon.length > HORIZON_MAX" class="empty fade">+{{ horizon.length - HORIZON_MAX }} more</div>
         </template>
       </div>
     </div>

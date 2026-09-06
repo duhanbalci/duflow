@@ -27,12 +27,21 @@ pub fn brief(g: &Graph, id: &str) -> Option<Brief> {
             reads.extend(crate::expr::idents(w));
         }
     }
-    let checks: Vec<CheckDef> = node.checks.iter().filter_map(|c| g.checks.get(&c.name).cloned()).collect();
+    let checks: Vec<CheckDef> = node
+        .checks
+        .iter()
+        .filter_map(|c| g.checks.get(&c.name).cloned())
+        .collect();
     for c in &checks {
         reads.extend(c.reads.iter().cloned());
     }
     let grp = group_of(id);
-    let group_siblings = g.nodes.keys().filter(|k| *k != id && group_of(k) == grp).cloned().collect();
+    let group_siblings = g
+        .nodes
+        .keys()
+        .filter(|k| *k != id && group_of(k) == grp)
+        .cloned()
+        .collect();
     Some(Brief {
         path_from_root: g.path_from_roots(id),
         incoming: g.incoming_edges(id).into_iter().cloned().collect(),
@@ -59,26 +68,34 @@ impl Brief {
             s.push_str(&format!("- {k}: {v}\n"));
         }
         if let Some(p) = &self.path_from_root {
-            s.push_str(&format!("\n## Nasıl gelinir ({} adım)\n{}\n", p.len() - 1, p.join(" → ")));
+            s.push_str(&format!(
+                "\n## How to get here ({} steps)\n{}\n",
+                p.len() - 1,
+                p.join(" → ")
+            ));
         } else {
-            s.push_str("\n## Nasıl gelinir\n(root'tan erişilemiyor)\n");
+            s.push_str("\n## How to get here\n(not reachable from a root)\n");
         }
         if !self.incoming.is_empty() {
-            s.push_str("\n## Gelen\n");
+            s.push_str("\n## Incoming\n");
             for e in &self.incoming {
                 s.push_str(&format!("- {} {}\n", e.from, tag(&e.label)));
             }
         }
-        s.push_str("\n## Çıkışlar\n");
+        s.push_str("\n## Outgoing\n");
         if self.outgoing.is_empty() {
-            s.push_str("(yok)\n");
+            s.push_str("(none)\n");
         }
         for e in &self.outgoing {
-            let d = g.nodes.get(&e.to).and_then(|t| t.desc.clone()).unwrap_or_default();
+            let d = g
+                .nodes
+                .get(&e.to)
+                .and_then(|t| t.desc.clone())
+                .unwrap_or_default();
             s.push_str(&format!("- {}→ {} — {d}\n", tag_post(&e.label), e.to));
         }
         if !self.checks.is_empty() || !n.checks.is_empty() {
-            s.push_str("\n## Check'ler\n");
+            s.push_str("\n## Checks\n");
             for c in &n.checks {
                 let def = self.checks.iter().find(|d| d.id == c.name);
                 let desc = def.and_then(|d| d.desc.clone()).unwrap_or_default();
@@ -91,27 +108,42 @@ impl Brief {
             }
         }
         if !self.reads.is_empty() || !self.writes.is_empty() {
-            s.push_str("\n## Değişkenler\n");
+            s.push_str("\n## Variables\n");
             for r in &self.reads {
-                let src = g.vars.get(r).map(|v| v.source.clone().unwrap_or_else(|| "sets".into())).unwrap_or_else(|| "?".into());
-                s.push_str(&format!("- okur {r} ({src})\n"));
+                let src = g
+                    .vars
+                    .get(r)
+                    .map(|v| v.source.clone().unwrap_or_else(|| "sets".into()))
+                    .unwrap_or_else(|| "?".into());
+                s.push_str(&format!("- reads {r} ({src})\n"));
             }
             for w in &self.writes {
-                s.push_str(&format!("- yazar {} {}\n", w.var, w.value));
+                s.push_str(&format!("- sets {} {}\n", w.var, w.value));
             }
         }
         if !self.group_siblings.is_empty() {
-            s.push_str(&format!("\n## Aynı grup\n{}\n", self.group_siblings.join(", ")));
+            s.push_str(&format!(
+                "\n## Same group\n{}\n",
+                self.group_siblings.join(", ")
+            ));
         }
         s
     }
 }
 
 fn tag(label: &str) -> String {
-    if label.is_empty() { String::new() } else { format!("[{label}]") }
+    if label.is_empty() {
+        String::new()
+    } else {
+        format!("[{label}]")
+    }
 }
 fn tag_post(label: &str) -> String {
-    if label.is_empty() { String::new() } else { format!("[{label}] ") }
+    if label.is_empty() {
+        String::new()
+    } else {
+        format!("[{label}] ")
+    }
 }
 
 /// Ön koşul zinciri: hedefe geriye doğru BFS; her adımda geçilmesi gereken guard/check'ler.
@@ -157,7 +189,11 @@ pub fn prereq(g: &Graph, id: &str, depth: usize) -> Option<Prereq> {
             let (a, b) = (&w[0], &w[1]);
             // aynı hedefe giden kenarlardan en az kısıtlı olanı (guard'sız varsa o)
             let edges: Vec<&ResolvedEdge> = g.outgoing(a).iter().filter(|e| &e.to == b).collect();
-            let e = edges.iter().find(|e| e.when.is_none()).or(edges.first()).copied()?;
+            let e = edges
+                .iter()
+                .find(|e| e.when.is_none())
+                .or(edges.first())
+                .copied()?;
             let checks: Vec<String> = g.nodes[a].checks.iter().map(|c| c.name.clone()).collect();
             if let Some(wh) = &e.when {
                 vars.extend(crate::expr::idents(wh));
@@ -167,7 +203,13 @@ pub fn prereq(g: &Graph, id: &str, depth: usize) -> Option<Prereq> {
                     vars.extend(d.reads.iter().cloned());
                 }
             }
-            steps.push(PrereqStep { from: a.clone(), to: b.clone(), label: e.label.clone(), when: e.when.clone(), checks });
+            steps.push(PrereqStep {
+                from: a.clone(),
+                to: b.clone(),
+                label: e.label.clone(),
+                when: e.when.clone(),
+                checks,
+            });
         }
     }
     // geriye BFS
@@ -187,43 +229,61 @@ pub fn prereq(g: &Graph, id: &str, depth: usize) -> Option<Prereq> {
         .into_iter()
         .map(|v| VarChain {
             source: g.vars.get(&v).and_then(|d| d.source.clone()),
-            writers: g.var_writers(&v).into_iter().map(|(n, s)| format!("{} ({})", n.id, s.value)).collect(),
+            writers: g
+                .var_writers(&v)
+                .into_iter()
+                .map(|(n, s)| format!("{} ({})", n.id, s.value))
+                .collect(),
             var: v,
         })
         .collect();
-    Some(Prereq { target: id.into(), path, steps, ancestors: ancestors.into_iter().collect(), vars })
+    Some(Prereq {
+        target: id.into(),
+        path,
+        steps,
+        ancestors: ancestors.into_iter().collect(),
+        vars,
+    })
 }
 
 impl Prereq {
     pub fn to_markdown(&self) -> String {
-        let mut s = format!("# Ön koşullar: {}\n", self.target);
+        let mut s = format!("# Prerequisites: {}\n", self.target);
         match &self.path {
-            Some(p) => s.push_str(&format!("\nYol ({} adım): {}\n", p.len() - 1, p.join(" → "))),
-            None => s.push_str("\nRoot'tan erişilemiyor.\n"),
+            Some(p) => s.push_str(&format!(
+                "\nPath ({} steps): {}\n",
+                p.len() - 1,
+                p.join(" → ")
+            )),
+            None => s.push_str("\nNot reachable from a root.\n"),
         }
         if !self.steps.is_empty() {
-            s.push_str("\n## Adımlar\n");
+            s.push_str("\n## Steps\n");
             for (i, st) in self.steps.iter().enumerate() {
                 let mut line = format!("{}. {} → {}", i + 1, st.from, st.to);
                 if !st.label.is_empty() {
                     line.push_str(&format!(" [{}]", st.label));
                 }
                 if !st.checks.is_empty() {
-                    line.push_str(&format!(" · geçmeli: {}", st.checks.join(", ")));
+                    line.push_str(&format!(" · must pass: {}", st.checks.join(", ")));
                 }
                 s.push_str(&line);
                 s.push('\n');
             }
         }
         if !self.vars.is_empty() {
-            s.push_str("\n## Gereken değişkenler\n");
+            s.push_str("\n## Required variables\n");
             for v in &self.vars {
-                let src = v.source.clone().map(|x| format!("kaynak {x}")).unwrap_or_else(|| format!("yazan: {}", v.writers.join(", ")));
+                let src = v
+                    .source
+                    .clone()
+                    .map(|x| format!("source {x}"))
+                    .unwrap_or_else(|| format!("set by: {}", v.writers.join(", ")));
                 s.push_str(&format!("- {} — {src}\n", v.var));
             }
         }
         if !self.ancestors.is_empty() {
-            s.push_str(&format!("\n## Öncüller\n{}\n", self.ancestors.join(", ")));
+            s.push_str(&format!("\n## Ancestors\n{}\n", self.ancestors.join(", ")));
         }
         s
     }
@@ -263,17 +323,35 @@ pub fn search(g: &Graph, q: &str, limit: usize) -> Vec<Hit> {
         let a = fuzzy(&n.id, q).map(|s| s + 20);
         let b = n.desc.as_deref().and_then(|d| fuzzy(d, q));
         if let Some(s) = a.into_iter().chain(b).max() {
-            hits.push(Hit { kind: n.kind.as_str().into(), id: n.id.clone(), desc: n.desc.clone().unwrap_or_default(), score: s, go: Some(n.id.clone()) });
+            hits.push(Hit {
+                kind: n.kind.as_str().into(),
+                id: n.id.clone(),
+                desc: n.desc.clone().unwrap_or_default(),
+                score: s,
+                go: Some(n.id.clone()),
+            });
         }
     }
     for c in g.checks.values() {
         if let Some(s) = fuzzy(&c.id, q) {
-            hits.push(Hit { kind: "check".into(), id: c.id.clone(), desc: c.desc.clone().unwrap_or_default(), score: s + 10, go: g.check_users(&c.id).first().map(|n| n.id.clone()) });
+            hits.push(Hit {
+                kind: "check".into(),
+                id: c.id.clone(),
+                desc: c.desc.clone().unwrap_or_default(),
+                score: s + 10,
+                go: g.check_users(&c.id).first().map(|n| n.id.clone()),
+            });
         }
     }
     for v in g.vars.values() {
         if let Some(s) = fuzzy(&v.id, q) {
-            hits.push(Hit { kind: "var".into(), id: v.id.clone(), desc: v.source.clone().unwrap_or_else(|| "sets".into()), score: s + 10, go: g.var_writers(&v.id).first().map(|(n, _)| n.id.clone()) });
+            hits.push(Hit {
+                kind: "var".into(),
+                id: v.id.clone(),
+                desc: v.source.clone().unwrap_or_else(|| "sets".into()),
+                score: s + 10,
+                go: g.var_writers(&v.id).first().map(|(n, _)| n.id.clone()),
+            });
         }
     }
     hits.sort_by(|a, b| b.score.cmp(&a.score).then(a.id.cmp(&b.id)));

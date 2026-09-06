@@ -1,14 +1,17 @@
 //! `duflow` CLI. Tüm sorgular `--json` alır; insan çıktısı markdown/metin.
 
 use anyhow::{Context, Result, bail};
+use clap::CommandFactory as _;
 use clap::{Args, Parser, Subcommand};
+use clap_complete::engine::{ArgValueCompleter, CompletionCandidate};
+use duflow_core::Graph;
 use duflow_core::diff::diff;
 use duflow_core::edit::{Op, Workspace};
 use duflow_core::export;
 use duflow_core::lint::{Level, lint};
 use duflow_core::query;
-use duflow_core::Graph;
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -16,12 +19,16 @@ use std::process::Command;
 mod ui;
 
 #[derive(Parser)]
-#[command(name = "duflow", version, about = "Sistem akış grafı: KDL dosyaları, sorgu, düzenleme, UI")]
+#[command(
+    name = "duflow",
+    version,
+    about = "System flow graph: KDL files, queries, editing, UI"
+)]
 struct Cli {
-    /// flows dizini (varsayılan: ./flows, yoksa üst dizinlerde aranır)
+    /// flows directory (default: ./flows, searched upward)
     #[arg(short = 'd', long, global = true)]
     dir: Option<PathBuf>,
-    /// JSON çıktı
+    /// JSON output
     #[arg(long, global = true)]
     json: bool,
     #[command(subcommand)]
@@ -30,26 +37,30 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Lint: kopuk referans, erişilemeyen node, tanımsız var... (hata varsa exit 1)
+    /// Lint: dangling refs, unreachable nodes, undefined vars... (exit 1 on errors)
     Validate,
-    /// Bir node'un AI için tek parça özeti
+    /// One-shot summary of a node, for AI
     Brief {
+        #[arg(add = ArgValueCompleter::new(complete_node))]
         id: String,
-        /// Geriye/ileriye derinlik (öncül listesi)
+        /// Depth (ancestor list)
         #[arg(long, default_value_t = 1)]
         depth: usize,
     },
-    /// Bir node'a gelmek için gereken adımlar, check'ler, değişkenler
+    /// Steps, checks and variables needed to reach a node
     Prereq {
+        #[arg(add = ArgValueCompleter::new(complete_node))]
         id: String,
         #[arg(long, default_value_t = 3)]
         depth: usize,
     },
-    /// İki node arası yollar
+    /// Paths between two nodes
     Path {
+        #[arg(add = ArgValueCompleter::new(complete_node))]
         from: String,
+        #[arg(add = ArgValueCompleter::new(complete_node))]
         to: String,
-        /// En kısa yerine tüm basit yollar (en fazla --max)
+        /// All simple paths instead of the shortest (up to --max)
         #[arg(long)]
         all: bool,
         #[arg(long, default_value_t = 5)]
@@ -57,72 +68,90 @@ enum Cmd {
         #[arg(long, default_value_t = 30)]
         depth: usize,
     },
-    /// Bir node'dan ileriye erişilebilen küme
-    Reach { id: String },
-    /// Bir değişkeni kim yazıyor, kim okuyor
-    Var { id: String },
-    /// ID/desc/check/var üstünde fuzzy arama
+    /// Set of nodes reachable forward from a node
+    Reach {
+        #[arg(add = ArgValueCompleter::new(complete_node))]
+        id: String,
+    },
+    /// Who sets and who reads a variable
+    Var {
+        #[arg(add = ArgValueCompleter::new(complete_var))]
+        id: String,
+    },
+    /// Fuzzy search over ID/desc/check/var
     Search {
         query: String,
         #[arg(long, default_value_t = 15)]
         limit: usize,
     },
-    /// Node listesi (filtre: --kind, --layer, --prefix)
+    /// List nodes (filters: --kind, --layer, --prefix)
     Ls {
-        #[arg(long)]
+        #[arg(long, value_parser = ["state", "action", "call", "event"])]
         kind: Option<String>,
-        #[arg(long)]
+        #[arg(long, add = ArgValueCompleter::new(complete_layer))]
         layer: Option<String>,
-        #[arg(long)]
+        #[arg(long, add = ArgValueCompleter::new(complete_node))]
         prefix: Option<String>,
     },
-    /// Yeni node: duflow add state deploy.done --layer domain --desc "..." --child '-> "x"'
+    /// New node: duflow add state deploy.done --layer domain --desc "..." --child '-> "x"'
     Add(AddArgs),
-    /// Node düzenle: --set key=value, --child '<kdl satırı>', --rm-edge <hedef>, --rm-child name:arg
+    /// Edit a node: --set key=value, --child '<kdl line>', --rm-edge <target>, --rm-child name:arg
     Edit(EditArgs),
-    /// ID yeniden adlandır (tüm referanslar + dosya taşıma)
-    Rename { from: String, to: String },
-    /// Node sil (referans varsa --force gerekir)
+    /// Rename an ID (all references + file move)
+    Rename {
+        #[arg(add = ArgValueCompleter::new(complete_node))]
+        from: String,
+        to: String,
+    },
+    /// Remove a node (--force required if referenced)
     Rm {
+        #[arg(add = ArgValueCompleter::new(complete_node))]
         id: String,
         #[arg(long)]
         force: bool,
     },
-    /// stdin'den JSON işlem listesi uygula (`-`), ya da dosyadan
+    /// Apply a JSON op list from stdin (`-`) or a file
     Apply {
         #[arg(default_value = "-")]
         file: String,
-        /// Yazmadan önizle
+        /// Preview without writing
         #[arg(long)]
         dry_run: bool,
     },
-    /// İki git rev'i arası graf farkı (rev2 verilmezse çalışma dizini)
+    /// Graph diff between two git revs (working tree if rev2 omitted)
     Diff {
+        #[arg(add = ArgValueCompleter::new(complete_rev))]
         rev1: String,
+        #[arg(add = ArgValueCompleter::new(complete_rev))]
         rev2: Option<String>,
     },
-    /// Grafı UI JSON şemasında bas
+    /// Print the graph in the UI JSON schema
     Export {
-        /// Diff overlay için taban rev
-        #[arg(long)]
+        /// Base rev for the diff overlay
+        #[arg(long, add = ArgValueCompleter::new(complete_rev))]
         diff: Option<String>,
     },
     /// UI
     #[command(subcommand)]
     Ui(UiCmd),
+    /// Print shell setup for autocomplete (fish | zsh | bash)
+    Completions {
+        #[arg(value_parser = ["fish", "zsh", "bash"])]
+        shell: String,
+    },
 }
 
 #[derive(Subcommand)]
 enum UiCmd {
-    /// Tek dosya statik site üret
+    /// Build a single-file static site
     Build {
         #[arg(short, long, default_value = "duflow.html")]
         out: PathBuf,
-        /// Diff overlay: `main` ya da `a..b`
-        #[arg(long)]
+        /// Diff overlay: `main` or `a..b`
+        #[arg(long, add = ArgValueCompleter::new(complete_rev))]
         diff: Option<String>,
     },
-    /// Yerel sunucu; her istekte yeniden derler (F5 yeter)
+    /// Local server; rebuilds on every request (F5 is enough)
     Serve {
         #[arg(long, default_value = "127.0.0.1:4646")]
         addr: String,
@@ -132,37 +161,41 @@ enum UiCmd {
 #[derive(Args)]
 struct AddArgs {
     /// state | action | call | event | var | check | root
+    #[arg(value_parser = ["state", "action", "call", "event", "var", "check", "root"])]
     kind: String,
     id: String,
-    #[arg(long)]
+    #[arg(long, add = ArgValueCompleter::new(complete_layer))]
     layer: Option<String>,
     #[arg(long)]
     desc: Option<String>,
-    /// Ek attribute: --attr method=POST --attr path=/x
+    /// Extra attribute: --attr method=POST --attr path=/x
     #[arg(long = "attr")]
     attrs: Vec<String>,
-    /// Çocuk satırı (ham KDL), tekrarlanabilir
+    /// Child line (raw KDL), repeatable
     #[arg(long = "child", allow_hyphen_values = true)]
     children: Vec<String>,
 }
 
 #[derive(Args)]
 struct EditArgs {
+    #[arg(add = ArgValueCompleter::new(complete_node))]
     id: String,
     #[arg(long = "set", allow_hyphen_values = true)]
     sets: Vec<String>,
     #[arg(long = "child", allow_hyphen_values = true)]
     children: Vec<String>,
-    #[arg(long = "rm-edge")]
+    #[arg(long = "rm-edge", add = ArgValueCompleter::new(complete_node))]
     rm_edges: Vec<String>,
-    /// `name:arg`, örn. `check:perm:x` ya da `sets:deploy.attempts`
+    /// `name:arg`, e.g. `check:perm:x` or `sets:deploy.attempts`
     #[arg(long = "rm-child")]
     rm_children: Vec<String>,
 }
 
 fn main() {
+    // Shell autocomplete: `COMPLETE=fish duflow | source` (bkz. `duflow completions`)
+    clap_complete::CompleteEnv::with_factory(Cli::command).complete();
     if let Err(e) = run() {
-        eprintln!("hata: {e:#}");
+        eprintln!("error: {e:#}");
         std::process::exit(2);
     }
 }
@@ -178,7 +211,7 @@ fn find_dir(explicit: Option<PathBuf>) -> Result<PathBuf> {
             return Ok(c);
         }
         if !cur.pop() {
-            bail!("`flows/` dizini bulunamadı (--dir ile ver)");
+            bail!("`flows/` directory not found (pass --dir)");
         }
     }
 }
@@ -199,7 +232,12 @@ fn run() -> Result<()> {
                 }
                 let e = d.iter().filter(|x| x.level == Level::Error).count();
                 let w = d.len() - e;
-                println!("{} node, {} var, {} check · {e} hata, {w} uyarı", g.nodes.len(), g.vars.len(), g.checks.len());
+                println!(
+                    "{} nodes, {} vars, {} checks · {e} errors, {w} warnings",
+                    g.nodes.len(),
+                    g.vars.len(),
+                    g.checks.len()
+                );
             }
             if d.iter().any(|x| x.level == Level::Error) {
                 std::process::exit(1);
@@ -207,7 +245,7 @@ fn run() -> Result<()> {
         }
         Cmd::Brief { id, depth } => {
             let g = Graph::load(&dir)?;
-            let b = query::brief(&g, &id).with_context(|| format!("`{id}` yok"))?;
+            let b = query::brief(&g, &id).with_context(|| format!("`{id}` not found"))?;
             let _ = depth;
             if json {
                 println!("{}", serde_json::to_string_pretty(&b)?);
@@ -217,36 +255,46 @@ fn run() -> Result<()> {
         }
         Cmd::Prereq { id, depth } => {
             let g = Graph::load(&dir)?;
-            let p = query::prereq(&g, &id, depth).with_context(|| format!("`{id}` yok"))?;
+            let p = query::prereq(&g, &id, depth).with_context(|| format!("`{id}` not found"))?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&p)?);
             } else {
                 print!("{}", p.to_markdown());
             }
         }
-        Cmd::Path { from, to, all, max, depth } => {
+        Cmd::Path {
+            from,
+            to,
+            all,
+            max,
+            depth,
+        } => {
             let g = Graph::load(&dir)?;
             for x in [&from, &to] {
                 if !g.nodes.contains_key(x) {
-                    bail!("`{x}` yok");
+                    bail!("`{x}` not found");
                 }
             }
-            let paths: Vec<Vec<String>> = if all { g.all_paths(&from, &to, max, depth) } else { g.shortest_path(&from, &to).into_iter().collect() };
+            let paths: Vec<Vec<String>> = if all {
+                g.all_paths(&from, &to, max, depth)
+            } else {
+                g.shortest_path(&from, &to).into_iter().collect()
+            };
             if json {
                 println!("{}", serde_json::to_string_pretty(&paths)?);
             } else if paths.is_empty() {
-                println!("yol yok");
+                println!("no path");
                 std::process::exit(1);
             } else {
                 for p in &paths {
-                    println!("{} adım: {}", p.len() - 1, p.join(" → "));
+                    println!("{} steps: {}", p.len() - 1, p.join(" → "));
                 }
             }
         }
         Cmd::Reach { id } => {
             let g = Graph::load(&dir)?;
             if !g.nodes.contains_key(&id) {
-                bail!("`{id}` yok");
+                bail!("`{id}` not found");
             }
             let r = g.reach_forward(&[&id]);
             if json {
@@ -259,15 +307,51 @@ fn run() -> Result<()> {
         }
         Cmd::Var { id } => {
             let g = Graph::load(&dir)?;
-            let v = g.vars.get(&id).with_context(|| format!("var `{id}` yok"))?;
-            let writers: Vec<String> = g.var_writers(&id).into_iter().map(|(n, s)| format!("{} {} ({}:{})", n.id, s.value, n.file, s.line)).collect();
-            let readers: Vec<String> = g.var_readers(&id).into_iter().map(|(n, w)| format!("{n} [{w}]")).collect();
+            let v = g
+                .vars
+                .get(&id)
+                .with_context(|| format!("var `{id}` not found"))?;
+            let writers: Vec<String> = g
+                .var_writers(&id)
+                .into_iter()
+                .map(|(n, s)| format!("{} {} ({}:{})", n.id, s.value, n.file, s.line))
+                .collect();
+            let readers: Vec<String> = g
+                .var_readers(&id)
+                .into_iter()
+                .map(|(n, w)| format!("{n} [{w}]"))
+                .collect();
             if json {
-                println!("{}", serde_json::json!({"var": v, "writers": writers, "readers": readers}));
+                println!(
+                    "{}",
+                    serde_json::json!({"var": v, "writers": writers, "readers": readers})
+                );
             } else {
-                println!("# {} ({}){}", v.id, v.ty, v.source.as_ref().map(|s| format!(" · kaynak {s}")).unwrap_or_default());
-                println!("\n## Yazan\n{}", if writers.is_empty() { "(yok)".into() } else { writers.join("\n") });
-                println!("\n## Okuyan\n{}", if readers.is_empty() { "(yok)".into() } else { readers.join("\n") });
+                println!(
+                    "# {} ({}){}",
+                    v.id,
+                    v.ty,
+                    v.source
+                        .as_ref()
+                        .map(|s| format!(" · source {s}"))
+                        .unwrap_or_default()
+                );
+                println!(
+                    "\n## Set by\n{}",
+                    if writers.is_empty() {
+                        "(none)".into()
+                    } else {
+                        writers.join("\n")
+                    }
+                );
+                println!(
+                    "\n## Read by\n{}",
+                    if readers.is_empty() {
+                        "(none)".into()
+                    } else {
+                        readers.join("\n")
+                    }
+                );
             }
         }
         Cmd::Search { query: q, limit } => {
@@ -281,7 +365,11 @@ fn run() -> Result<()> {
                 }
             }
         }
-        Cmd::Ls { kind, layer, prefix } => {
+        Cmd::Ls {
+            kind,
+            layer,
+            prefix,
+        } => {
             let g = Graph::load(&dir)?;
             let list: Vec<_> = g
                 .nodes
@@ -294,7 +382,13 @@ fn run() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&list)?);
             } else {
                 for n in list {
-                    println!("{:<7} {:<7} {}  {}", n.kind.as_str(), n.layer, n.id, n.desc.clone().unwrap_or_default());
+                    println!(
+                        "{:<7} {:<7} {}  {}",
+                        n.kind.as_str(),
+                        n.layer,
+                        n.id,
+                        n.desc.clone().unwrap_or_default()
+                    );
                 }
             }
         }
@@ -307,35 +401,60 @@ fn run() -> Result<()> {
                 attrs.insert("desc".into(), d);
             }
             for kv in a.attrs {
-                let (k, v) = kv.split_once('=').with_context(|| format!("--attr `{kv}`: key=value bekleniyor"))?;
+                let (k, v) = kv
+                    .split_once('=')
+                    .with_context(|| format!("--attr `{kv}`: expected key=value"))?;
                 attrs.insert(k.into(), v.into());
             }
             let op = match a.kind.as_str() {
                 "var" => Op::AddVar { id: a.id, attrs },
                 "check" => Op::AddCheck { id: a.id, attrs },
                 "root" => Op::AddRoot { id: a.id },
-                k => Op::AddNode { kind: k.into(), id: a.id, attrs, children: a.children },
+                k => Op::AddNode {
+                    kind: k.into(),
+                    id: a.id,
+                    attrs,
+                    children: a.children,
+                },
             };
             apply_ops(&dir, &[op], false, json)?;
         }
         Cmd::Edit(e) => {
             let mut ops = vec![];
             for kv in e.sets {
-                let (k, v) = kv.split_once('=').with_context(|| format!("--set `{kv}`: key=value bekleniyor"))?;
-                ops.push(Op::SetAttr { id: e.id.clone(), key: k.into(), value: v.into() });
+                let (k, v) = kv
+                    .split_once('=')
+                    .with_context(|| format!("--set `{kv}`: expected key=value"))?;
+                ops.push(Op::SetAttr {
+                    id: e.id.clone(),
+                    key: k.into(),
+                    value: v.into(),
+                });
             }
             for c in e.children {
-                ops.push(Op::AddChild { id: e.id.clone(), line: c });
+                ops.push(Op::AddChild {
+                    id: e.id.clone(),
+                    line: c,
+                });
             }
             for t in e.rm_edges {
-                ops.push(Op::RmEdge { id: e.id.clone(), to: t });
+                ops.push(Op::RmEdge {
+                    id: e.id.clone(),
+                    to: t,
+                });
             }
             for rc in e.rm_children {
-                let (name, arg) = rc.split_once(':').with_context(|| format!("--rm-child `{rc}`: name:arg bekleniyor"))?;
-                ops.push(Op::RmChild { id: e.id.clone(), name: name.into(), arg: arg.into() });
+                let (name, arg) = rc
+                    .split_once(':')
+                    .with_context(|| format!("--rm-child `{rc}`: expected name:arg"))?;
+                ops.push(Op::RmChild {
+                    id: e.id.clone(),
+                    name: name.into(),
+                    arg: arg.into(),
+                });
             }
             if ops.is_empty() {
-                bail!("hiç işlem verilmedi");
+                bail!("no operations given");
             }
             apply_ops(&dir, &ops, false, json)?;
         }
@@ -349,7 +468,8 @@ fn run() -> Result<()> {
             } else {
                 std::fs::read_to_string(&file)?
             };
-            let ops: Vec<Op> = serde_json::from_str(&src).context("JSON işlem listesi parse edilemedi")?;
+            let ops: Vec<Op> =
+                serde_json::from_str(&src).context("could not parse JSON op list")?;
             apply_ops(&dir, &ops, dry_run, json)?;
         }
         Cmd::Diff { rev1, rev2 } => {
@@ -375,9 +495,22 @@ fn run() -> Result<()> {
             let data = export_json(&dir, &g, base.as_deref())?;
             let html = ui::render(&data);
             std::fs::write(&out, html)?;
-            eprintln!("{} yazıldı ({} node)", out.display(), g.nodes.len());
+            eprintln!("wrote {} ({} nodes)", out.display(), g.nodes.len());
         }
         Cmd::Ui(UiCmd::Serve { addr }) => ui::serve(&dir, &addr)?,
+        Cmd::Completions { shell } => {
+            let line = match shell.as_str() {
+                "fish" => "COMPLETE=fish duflow | source",
+                "zsh" => "source <(COMPLETE=zsh duflow)",
+                _ => "source <(COMPLETE=bash duflow)",
+            };
+            let file = match shell.as_str() {
+                "fish" => "~/.config/fish/completions/duflow.fish",
+                "zsh" => "~/.zshrc",
+                _ => "~/.bashrc",
+            };
+            println!("# add to {file}:\n{line}");
+        }
     }
     Ok(())
 }
@@ -397,10 +530,13 @@ fn apply_ops(dir: &Path, ops: &[Op], dry_run: bool, json: bool) -> Result<()> {
     let d = lint(&g);
     let errors: Vec<_> = d.iter().filter(|x| x.level == Level::Error).collect();
     if json {
-        println!("{}", serde_json::json!({"written": written, "errors": errors}));
+        println!(
+            "{}",
+            serde_json::json!({"written": written, "errors": errors})
+        );
     } else {
         for f in &written {
-            println!("yazıldı: {f}");
+            println!("wrote: {f}");
         }
         for e in &errors {
             println!("{e}");
@@ -411,22 +547,39 @@ fn apply_ops(dir: &Path, ops: &[Op], dry_run: bool, json: bool) -> Result<()> {
 
 /// Bir git rev'indeki `flows/` dizininden graf.
 pub fn graph_at(dir: &Path, rev: &str) -> Result<Graph> {
-    let repo_root = git(dir, &["rev-parse", "--show-toplevel"])?.trim().to_string();
-    let rel = dir.canonicalize()?.strip_prefix(Path::new(&repo_root).canonicalize()?).map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+    let repo_root = git(dir, &["rev-parse", "--show-toplevel"])?
+        .trim()
+        .to_string();
+    let rel = dir
+        .canonicalize()?
+        .strip_prefix(Path::new(&repo_root).canonicalize()?)
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_default();
     let list = git(dir, &["ls-tree", "-r", "--name-only", rev, "--", &rel])?;
     let mut sources = vec![];
     for path in list.lines().filter(|l| l.ends_with(".kdl")) {
         let src = git(dir, &["show", &format!("{rev}:{path}")])?;
-        let inner = path.strip_prefix(&format!("{rel}/")).unwrap_or(path).to_string();
+        let inner = path
+            .strip_prefix(&format!("{rel}/"))
+            .unwrap_or(path)
+            .to_string();
         sources.push((inner, src));
     }
     Ok(Graph::from_sources(&sources)?)
 }
 
 fn git(dir: &Path, args: &[&str]) -> Result<String> {
-    let out = Command::new("git").args(args).current_dir(dir).output().context("git çalıştırılamadı")?;
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .context("could not run git")?;
     if !out.status.success() {
-        bail!("git {}: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim());
+        bail!(
+            "git {}: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
     }
     Ok(String::from_utf8(out.stdout)?)
 }
@@ -437,7 +590,10 @@ pub fn export_json(dir: &Path, g: &Graph, base: Option<&str>) -> Result<String> 
     let old;
     let mut exp = match base {
         Some(spec) => {
-            let (r1, r2) = spec.split_once("..").map(|(a, b)| (a, Some(b))).unwrap_or((spec, None));
+            let (r1, r2) = spec
+                .split_once("..")
+                .map(|(a, b)| (a, Some(b)))
+                .unwrap_or((spec, None));
             old = graph_at(dir, r1)?;
             let newer;
             let new_ref = match r2 {
@@ -456,4 +612,80 @@ pub fn export_json(dir: &Path, g: &Graph, base: Option<&str>) -> Result<String> 
     };
     exp.diff = None;
     Ok(serde_json::to_string(&exp)?)
+}
+
+// --- Autocomplete ---
+// Shell'den her Tab'da binary çağrılır; grafı o an yükleyip ID'leri döneriz. `-d` görülmez,
+// cwd'den (ya da DUFLOW_DIR) bulunur. Graf yüklenemezse sessizce boş liste.
+
+fn complete_graph() -> Option<Graph> {
+    let dir = std::env::var_os("DUFLOW_DIR").map(PathBuf::from);
+    find_dir(dir).ok().and_then(|d| Graph::load(&d).ok())
+}
+
+fn cand(id: &str, help: Option<&str>) -> CompletionCandidate {
+    CompletionCandidate::new(id).help(help.map(|h| h.to_string().into()))
+}
+
+fn complete_node(current: &OsStr) -> Vec<CompletionCandidate> {
+    let cur = current.to_string_lossy();
+    let Some(g) = complete_graph() else {
+        return vec![];
+    };
+    g.nodes
+        .values()
+        .filter(|n| n.id.starts_with(cur.as_ref()))
+        .map(|n| cand(&n.id, n.desc.as_deref()))
+        .collect()
+}
+
+fn complete_var(current: &OsStr) -> Vec<CompletionCandidate> {
+    let cur = current.to_string_lossy();
+    let Some(g) = complete_graph() else {
+        return vec![];
+    };
+    g.vars
+        .values()
+        .filter(|v| v.id.starts_with(cur.as_ref()))
+        .map(|v| cand(&v.id, Some(&v.ty)))
+        .collect()
+}
+
+fn complete_layer(current: &OsStr) -> Vec<CompletionCandidate> {
+    let cur = current.to_string_lossy();
+    let layers = complete_graph()
+        .map(|g| g.config.layers.clone())
+        .unwrap_or_else(|| vec!["ui".into(), "api".into(), "domain".into()]);
+    layers
+        .iter()
+        .filter(|l| l.starts_with(cur.as_ref()))
+        .map(|l| cand(l, None))
+        .collect()
+}
+
+fn complete_rev(current: &OsStr) -> Vec<CompletionCandidate> {
+    let cur = current.to_string_lossy();
+    let Ok(dir) = find_dir(std::env::var_os("DUFLOW_DIR").map(PathBuf::from)) else {
+        return vec![];
+    };
+    let Ok(out) = git(
+        &dir,
+        &[
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "refs/heads",
+            "refs/tags",
+        ],
+    ) else {
+        return vec![];
+    };
+    let mut v: Vec<CompletionCandidate> = out
+        .lines()
+        .filter(|l| l.starts_with(cur.as_ref()))
+        .map(|l| cand(l, None))
+        .collect();
+    if "HEAD".starts_with(cur.as_ref()) {
+        v.push(cand("HEAD", None));
+    }
+    v
 }

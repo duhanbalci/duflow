@@ -39,8 +39,18 @@ pub fn diff(a: &Graph, b: &Graph) -> GraphDiff {
     for id in ida.intersection(&idb) {
         let (x, y) = (&a.nodes[*id], &b.nodes[*id]);
         let same_edges = |e: &Edge, f: &Edge| e.to == f.to && e.kind == f.kind && e.when == f.when;
-        let edges_added: Vec<Edge> = y.edges.iter().filter(|e| !x.edges.iter().any(|f| same_edges(e, f))).cloned().collect();
-        let edges_removed: Vec<Edge> = x.edges.iter().filter(|e| !y.edges.iter().any(|f| same_edges(e, f))).cloned().collect();
+        let edges_added: Vec<Edge> = y
+            .edges
+            .iter()
+            .filter(|e| !x.edges.iter().any(|f| same_edges(e, f)))
+            .cloned()
+            .collect();
+        let edges_removed: Vec<Edge> = x
+            .edges
+            .iter()
+            .filter(|e| !y.edges.iter().any(|f| same_edges(e, f)))
+            .cloned()
+            .collect();
         let mut fields = vec![];
         if x.kind != y.kind {
             fields.push("kind".into());
@@ -54,14 +64,29 @@ pub fn diff(a: &Graph, b: &Graph) -> GraphDiff {
         if x.attrs != y.attrs {
             fields.push("attrs".into());
         }
-        if x.checks.iter().map(|c| (&c.name, c.fail, &c.code, &c.to)).ne(y.checks.iter().map(|c| (&c.name, c.fail, &c.code, &c.to))) {
+        if x.checks
+            .iter()
+            .map(|c| (&c.name, c.fail, &c.code, &c.to))
+            .ne(y.checks.iter().map(|c| (&c.name, c.fail, &c.code, &c.to)))
+        {
             fields.push("checks".into());
         }
-        if x.sets.iter().map(|s| (&s.var, &s.value)).ne(y.sets.iter().map(|s| (&s.var, &s.value))) {
+        if x.sets
+            .iter()
+            .map(|s| (&s.var, &s.value))
+            .ne(y.sets.iter().map(|s| (&s.var, &s.value)))
+        {
             fields.push("sets".into());
         }
         if !edges_added.is_empty() || !edges_removed.is_empty() || !fields.is_empty() {
-            d.changed.push(NodeChange { id: (*id).clone(), edges_added, edges_removed, fields, before: x.clone(), after: y.clone() });
+            d.changed.push(NodeChange {
+                id: (*id).clone(),
+                edges_added,
+                edges_removed,
+                fields,
+                before: x.clone(),
+                after: y.clone(),
+            });
         }
     }
     let va: BTreeSet<&String> = a.vars.keys().collect();
@@ -77,13 +102,24 @@ pub fn diff(a: &Graph, b: &Graph) -> GraphDiff {
 
 impl GraphDiff {
     pub fn is_empty(&self) -> bool {
-        self.added.is_empty() && self.removed.is_empty() && self.changed.is_empty() && self.vars_added.is_empty() && self.vars_removed.is_empty() && self.checks_added.is_empty() && self.checks_removed.is_empty()
+        self.added.is_empty()
+            && self.removed.is_empty()
+            && self.changed.is_empty()
+            && self.vars_added.is_empty()
+            && self.vars_removed.is_empty()
+            && self.checks_added.is_empty()
+            && self.checks_removed.is_empty()
     }
 
     pub fn to_text(&self) -> String {
         let mut s = String::new();
         for n in &self.added {
-            s.push_str(&format!("+ {} ({}) {}\n", n.id, n.kind.as_str(), n.desc.clone().unwrap_or_default()));
+            s.push_str(&format!(
+                "+ {} ({}) {}\n",
+                n.id,
+                n.kind.as_str(),
+                n.desc.clone().unwrap_or_default()
+            ));
         }
         for n in &self.removed {
             s.push_str(&format!("- {} ({})\n", n.id, n.kind.as_str()));

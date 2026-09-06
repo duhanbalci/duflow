@@ -12,15 +12,15 @@ use thiserror::Error;
 pub enum EditError {
     #[error("{0}")]
     Io(#[from] std::io::Error),
-    #[error("{file}: KDL parse hatası: {msg}")]
+    #[error("{file}: KDL parse error: {msg}")]
     Parse { file: String, msg: String },
-    #[error("`{0}` bulunamadı")]
+    #[error("`{0}` not found")]
     NotFound(String),
     #[error("`{0}` zaten var ({1})")]
     Exists(String, String),
-    #[error("geçersiz ID `{0}`")]
+    #[error("invalid ID `{0}`")]
     InvalidId(String),
-    #[error("`{0}` şuralardan referans alıyor: {1} (--force ile referanslar da silinir)")]
+    #[error("`{0}` is referenced from: {1} (use --force to remove references too)")]
     Referenced(String, String),
     #[error("{0}")]
     Bad(String),
@@ -41,15 +41,32 @@ pub enum Op {
         children: Vec<String>,
     },
     /// Attribute ata (`desc`, `layer`, `method`...). Boş değer siler.
-    SetAttr { id: String, key: String, value: String },
+    SetAttr {
+        id: String,
+        key: String,
+        value: String,
+    },
     /// Ham KDL çocuk satırı ekle.
-    AddChild { id: String, line: String },
+    AddChild {
+        id: String,
+        line: String,
+    },
     /// Hedefi `to` olan çocukları sil (`->`, `on`, `returns`, `calls`, `check ... -> to`).
-    RmEdge { id: String, to: String },
+    RmEdge {
+        id: String,
+        to: String,
+    },
     /// Belirli bir çocuk satırını (ad + ilk argüman) sil: örn. `check` + `perm:x`, `sets` + `v`.
-    RmChild { id: String, name: String, arg: String },
+    RmChild {
+        id: String,
+        name: String,
+        arg: String,
+    },
     /// Node/var/check ID'sini yeniden adlandır; tüm referanslar güncellenir, gerekiyorsa dosya taşınır.
-    Rename { from: String, to: String },
+    Rename {
+        from: String,
+        to: String,
+    },
     /// Node sil. Referans varsa `force` olmadan reddedilir.
     RmNode {
         id: String,
@@ -66,7 +83,9 @@ pub enum Op {
         #[serde(default)]
         attrs: BTreeMap<String, String>,
     },
-    AddRoot { id: String },
+    AddRoot {
+        id: String,
+    },
 }
 
 /// Bellekte tutulan dosya kümesi.
@@ -87,12 +106,27 @@ impl Workspace {
             walk(dir, &mut files)?;
         }
         for f in files {
-            let rel = f.strip_prefix(dir).unwrap_or(&f).to_string_lossy().replace('\\', "/");
+            let rel = f
+                .strip_prefix(dir)
+                .unwrap_or(&f)
+                .to_string_lossy()
+                .replace('\\', "/");
             let src = std::fs::read_to_string(&f)?;
-            let doc: KdlDocument = src.parse().map_err(|e: kdl::KdlError| EditError::Parse { file: rel.clone(), msg: e.diagnostics.first().and_then(|d| d.message.clone()).unwrap_or_default() })?;
+            let doc: KdlDocument = src.parse().map_err(|e: kdl::KdlError| EditError::Parse {
+                file: rel.clone(),
+                msg: e
+                    .diagnostics
+                    .first()
+                    .and_then(|d| d.message.clone())
+                    .unwrap_or_default(),
+            })?;
             docs.insert(rel, doc);
         }
-        Ok(Self { dir: dir.into(), docs, dirty: BTreeMap::new() })
+        Ok(Self {
+            dir: dir.into(),
+            docs,
+            dirty: BTreeMap::new(),
+        })
     }
 
     pub fn apply_all(&mut self, ops: &[Op]) -> Result<(), EditError> {
@@ -104,9 +138,14 @@ impl Workspace {
 
     pub fn apply(&mut self, op: &Op) -> Result<(), EditError> {
         match op {
-            Op::AddNode { kind, id, attrs, children } => {
+            Op::AddNode {
+                kind,
+                id,
+                attrs,
+                children,
+            } => {
                 if !NODE_KINDS.contains(&kind.as_str()) {
-                    return Err(EditError::Bad(format!("bilinmeyen kind `{kind}`")));
+                    return Err(EditError::Bad(format!("unknown kind `{kind}`")));
                 }
                 if !is_valid_id(id) {
                     return Err(EditError::InvalidId(id.clone()));
@@ -129,7 +168,8 @@ impl Workspace {
             }
             Op::SetAttr { id, key, value } => {
                 let (file, node) = self.get_node_mut(id)?;
-                node.entries_mut().retain(|e| e.name().map(|n| n.value()) != Some(key.as_str()));
+                node.entries_mut()
+                    .retain(|e| e.name().map(|n| n.value()) != Some(key.as_str()));
                 // çocuk olarak yazılmış `desc` de varsa onu da düşür
                 if let Some(ch) = node.children_mut() {
                     ch.nodes_mut().retain(|c| c.name().value() != key.as_str());
@@ -153,7 +193,8 @@ impl Workspace {
                 let mut removed = 0;
                 if let Some(ch) = node.children_mut() {
                     let before = ch.nodes().len();
-                    ch.nodes_mut().retain(|c| !edge_targets(c).contains(&to.as_str()));
+                    ch.nodes_mut()
+                        .retain(|c| !edge_targets(c).contains(&to.as_str()));
                     removed = before - ch.nodes().len();
                 }
                 normalize_children(node);
@@ -168,7 +209,9 @@ impl Workspace {
                 let mut removed = 0;
                 if let Some(ch) = node.children_mut() {
                     let before = ch.nodes().len();
-                    ch.nodes_mut().retain(|c| !(c.name().value() == name && first_arg(c).as_deref() == Some(arg.as_str())));
+                    ch.nodes_mut().retain(|c| {
+                        !(c.name().value() == name && first_arg(c).as_deref() == Some(arg.as_str()))
+                    });
                     removed = before - ch.nodes().len();
                 }
                 normalize_children(node);
@@ -186,13 +229,24 @@ impl Workspace {
         }
     }
 
-    fn add_def(&mut self, kind: &str, default_file: &str, id: &str, attrs: &BTreeMap<String, String>) -> Result<(), EditError> {
+    fn add_def(
+        &mut self,
+        kind: &str,
+        default_file: &str,
+        id: &str,
+        attrs: &BTreeMap<String, String>,
+    ) -> Result<(), EditError> {
         if let Some((f, _)) = self.find_top(&[kind], id) {
             return Err(EditError::Exists(id.into(), f));
         }
         let node = new_top(kind, id, attrs);
         // aynı türden tanımların olduğu ilk dosyaya, yoksa varsayılana
-        let file = self.docs.iter().find(|(_, d)| d.nodes().iter().any(|n| n.name().value() == kind)).map(|(f, _)| f.clone()).unwrap_or_else(|| default_file.into());
+        let file = self
+            .docs
+            .iter()
+            .find(|(_, d)| d.nodes().iter().any(|n| n.name().value() == kind))
+            .map(|(f, _)| f.clone())
+            .unwrap_or_else(|| default_file.into());
         self.append_top(&file, node);
         Ok(())
     }
@@ -201,7 +255,10 @@ impl Workspace {
         if !is_valid_id(to) && !crate::model::is_valid_check_id(to) {
             return Err(EditError::InvalidId(to.into()));
         }
-        let Some((old_file, kind)) = self.find_top(&["state", "action", "call", "event", "var", "check"], from).map(|(f, n)| (f, n.name().value().to_string())) else {
+        let Some((old_file, kind)) = self
+            .find_top(&["state", "action", "call", "event", "var", "check"], from)
+            .map(|(f, n)| (f, n.name().value().to_string()))
+        else {
             return Err(EditError::NotFound(from.into()));
         };
         if self.find_top(&[kind.as_str()], to).is_some() {
@@ -224,7 +281,11 @@ impl Workspace {
             if new_file != old_file && !crate::model::allowed_files(to).contains(&old_file) {
                 let node = {
                     let doc = self.docs.get_mut(&old_file).unwrap();
-                    let idx = doc.nodes().iter().position(|n| first_arg(n).as_deref() == Some(to)).unwrap();
+                    let idx = doc
+                        .nodes()
+                        .iter()
+                        .position(|n| first_arg(n).as_deref() == Some(to))
+                        .unwrap();
                     doc.nodes_mut().remove(idx)
                 };
                 self.dirty.insert(old_file, true);
@@ -235,7 +296,9 @@ impl Workspace {
     }
 
     fn rm_node(&mut self, id: &str, force: bool) -> Result<(), EditError> {
-        let Some((file, _)) = self.find_top(&NODE_KINDS, id) else { return Err(EditError::NotFound(id.into())) };
+        let Some((file, _)) = self.find_top(&NODE_KINDS, id) else {
+            return Err(EditError::NotFound(id.into()));
+        };
         // referanslar
         let mut refs = vec![];
         for (f, doc) in &self.docs {
@@ -245,7 +308,9 @@ impl Workspace {
                     continue;
                 }
                 let name = n.name().value();
-                if (name == "root" || name == "view") && (nid == id || prop_eq(n, "from", id) || prop_eq(n, "to", id)) {
+                if (name == "root" || name == "view")
+                    && (nid == id || prop_eq(n, "from", id) || prop_eq(n, "to", id))
+                {
                     refs.push(format!("{f}: {name} {nid}"));
                 }
                 if name == "check" && prop_or_arrow(n) == Some(id.into()) {
@@ -266,7 +331,8 @@ impl Workspace {
                 let mut touched = false;
                 doc.nodes_mut().retain(|n| {
                     let name = n.name().value();
-                    let drop = (name == "root" && first_arg(n).as_deref() == Some(id)) || (name == "view" && (prop_eq(n, "from", id) || prop_eq(n, "to", id)));
+                    let drop = (name == "root" && first_arg(n).as_deref() == Some(id))
+                        || (name == "view" && (prop_eq(n, "from", id) || prop_eq(n, "to", id)));
                     touched |= drop;
                     !drop
                 });
@@ -284,7 +350,9 @@ impl Workspace {
             }
         }
         let doc = self.docs.get_mut(&file).unwrap();
-        doc.nodes_mut().retain(|n| !(NODE_KINDS.contains(&n.name().value()) && first_arg(n).as_deref() == Some(id)));
+        doc.nodes_mut().retain(|n| {
+            !(NODE_KINDS.contains(&n.name().value()) && first_arg(n).as_deref() == Some(id))
+        });
         self.dirty.insert(file, true);
         Ok(())
     }
@@ -302,7 +370,9 @@ impl Workspace {
 
     fn get_node_mut(&mut self, id: &str) -> Result<(String, &mut KdlNode), EditError> {
         for (f, doc) in self.docs.iter_mut() {
-            if let Some(n) = doc.nodes_mut().iter_mut().find(|n| NODE_KINDS.contains(&n.name().value()) && first_arg(n).as_deref() == Some(id)) {
+            if let Some(n) = doc.nodes_mut().iter_mut().find(|n| {
+                NODE_KINDS.contains(&n.name().value()) && first_arg(n).as_deref() == Some(id)
+            }) {
                 return Ok((f.clone(), n));
             }
         }
@@ -313,7 +383,11 @@ impl Workspace {
         let doc = self.docs.entry(file.into()).or_default();
         // önceki node ile arada boş satır
         if let Some(fmt) = node.format_mut() {
-            fmt.leading = if doc.nodes().is_empty() { String::new() } else { "\n".into() };
+            fmt.leading = if doc.nodes().is_empty() {
+                String::new()
+            } else {
+                "\n".into()
+            };
             if !fmt.terminator.ends_with('\n') {
                 fmt.terminator = "\n".into();
             }
@@ -350,14 +424,31 @@ impl Workspace {
         Ok(written)
     }
 
-    /// Yazmadan önizleme: dosya → içerik.
+    /// Preview without writingme: dosya → içerik.
     pub fn preview(&self) -> BTreeMap<String, String> {
-        self.dirty.iter().filter(|(_, d)| **d).map(|(f, _)| (f.clone(), self.docs.get(f).map(|d| d.to_string()).unwrap_or_default())).collect()
+        self.dirty
+            .iter()
+            .filter(|(_, d)| **d)
+            .map(|(f, _)| {
+                (
+                    f.clone(),
+                    self.docs.get(f).map(|d| d.to_string()).unwrap_or_default(),
+                )
+            })
+            .collect()
     }
 }
 
 fn child_from_str(line: &str) -> Result<KdlNode, EditError> {
-    let mut n = KdlNode::parse(line.trim()).map_err(|e| EditError::Bad(format!("çocuk satırı parse edilemedi `{line}`: {}", e.diagnostics.first().and_then(|d| d.message.clone()).unwrap_or_default())))?;
+    let mut n = KdlNode::parse(line.trim()).map_err(|e| {
+        EditError::Bad(format!(
+            "could not parse child line `{line}`: {}",
+            e.diagnostics
+                .first()
+                .and_then(|d| d.message.clone())
+                .unwrap_or_default()
+        ))
+    })?;
     let mut f = n.format().cloned().unwrap_or_default();
     f.leading = INDENT.into();
     f.terminator = "\n".into();
@@ -373,14 +464,22 @@ fn quoted(s: &str) -> String {
 /// Tırnaklı string argümanı.
 fn str_arg(v: &str) -> KdlEntry {
     let mut e = KdlEntry::new(KdlValue::String(v.into()));
-    e.set_format(KdlEntryFormat { value_repr: quoted(v), leading: " ".into(), ..Default::default() });
+    e.set_format(KdlEntryFormat {
+        value_repr: quoted(v),
+        leading: " ".into(),
+        ..Default::default()
+    });
     e
 }
 
 /// Tırnaklı `key="value"` prop'u.
 fn str_prop(key: &str, v: &str) -> KdlEntry {
     let mut e = KdlEntry::new_prop(key, KdlValue::String(v.into()));
-    e.set_format(KdlEntryFormat { value_repr: quoted(v), leading: " ".into(), ..Default::default() });
+    e.set_format(KdlEntryFormat {
+        value_repr: quoted(v),
+        leading: " ".into(),
+        ..Default::default()
+    });
     e
 }
 
@@ -389,13 +488,21 @@ fn set_str(e: &mut KdlEntry, v: &str) {
     e.set_value(KdlValue::String(v.into()));
     match e.format_mut() {
         Some(f) => f.value_repr = quoted(v),
-        None => e.set_format(KdlEntryFormat { value_repr: quoted(v), leading: " ".into(), ..Default::default() }),
+        None => e.set_format(KdlEntryFormat {
+            value_repr: quoted(v),
+            leading: " ".into(),
+            ..Default::default()
+        }),
     }
 }
 
 fn new_top(kind: &str, id: &str, attrs: &BTreeMap<String, String>) -> KdlNode {
     let mut node = KdlNode::new(kind);
-    node.set_format(KdlNodeFormat { terminator: "\n".into(), before_children: " ".into(), ..Default::default() });
+    node.set_format(KdlNodeFormat {
+        terminator: "\n".into(),
+        before_children: " ".into(),
+        ..Default::default()
+    });
     node.push(str_arg(id));
     for (k, v) in attrs {
         node.push(str_prop(k, v));
@@ -406,7 +513,9 @@ fn new_top(kind: &str, id: &str, attrs: &BTreeMap<String, String>) -> KdlNode {
 /// Çocuk silindikten/eklendikten sonra satır yapısı bozulmasın: her çocuk kendi satırında,
 /// `}` kendi satırında; fazladan boş satır üretilmez.
 fn normalize_children(node: &mut KdlNode) {
-    let Some(ch) = node.children_mut() else { return };
+    let Some(ch) = node.children_mut() else {
+        return;
+    };
     if ch.nodes().is_empty() {
         node.clear_children();
         if let Some(f) = node.format_mut() {
@@ -424,7 +533,8 @@ fn normalize_children(node: &mut KdlNode) {
         if !f.terminator.contains('\n') {
             f.terminator = "\n".into();
         }
-        prev_ends_nl = f.trailing.ends_with('\n') || (f.trailing.is_empty() && f.terminator.ends_with('\n'));
+        prev_ends_nl =
+            f.trailing.ends_with('\n') || (f.trailing.is_empty() && f.terminator.ends_with('\n'));
     }
     if let Some(f) = ch.format_mut() {
         f.trailing = f.trailing.trim_end_matches(' ').to_string();
@@ -436,7 +546,10 @@ fn push_child(node: &mut KdlNode, child: KdlNode) {
     let ch = node.ensure_children();
     ch.nodes_mut().push(child);
     if !had {
-        ch.set_format(kdl::KdlDocumentFormat { leading: "\n".into(), trailing: String::new() });
+        ch.set_format(kdl::KdlDocumentFormat {
+            leading: "\n".into(),
+            trailing: String::new(),
+        });
     }
     normalize_children(node);
     if let Some(f) = node.format_mut() {
@@ -449,25 +562,39 @@ fn push_child(node: &mut KdlNode, child: KdlNode) {
 /// Yeni üst düzey node: çocuklar bir girinti, `}` kendi satırında.
 fn fix_indent(node: &mut KdlNode) {
     if let Some(ch) = node.children_mut() {
-        ch.set_format(kdl::KdlDocumentFormat { leading: "\n".into(), trailing: String::new() });
+        ch.set_format(kdl::KdlDocumentFormat {
+            leading: "\n".into(),
+            trailing: String::new(),
+        });
     }
     normalize_children(node);
 }
 
 fn first_arg(n: &KdlNode) -> Option<String> {
-    n.entries().iter().find(|e| e.name().is_none()).map(|e| val_str(e.value()))
+    n.entries()
+        .iter()
+        .find(|e| e.name().is_none())
+        .map(|e| val_str(e.value()))
 }
 
 fn prop_eq(n: &KdlNode, key: &str, v: &str) -> bool {
-    n.entries().iter().any(|e| e.name().map(|k| k.value()) == Some(key) && e.value().as_string() == Some(v))
+    n.entries()
+        .iter()
+        .any(|e| e.name().map(|k| k.value()) == Some(key) && e.value().as_string() == Some(v))
 }
 
 fn prop_or_arrow(n: &KdlNode) -> Option<String> {
     let args: Vec<&KdlEntry> = n.entries().iter().filter(|e| e.name().is_none()).collect();
-    if let Some(i) = args.iter().position(|e| e.value().as_string() == Some("->")) {
+    if let Some(i) = args
+        .iter()
+        .position(|e| e.value().as_string() == Some("->"))
+    {
         return args.get(i + 1).map(|e| val_str(e.value()));
     }
-    n.entries().iter().find(|e| e.name().map(|k| k.value()) == Some("fail_to")).map(|e| val_str(e.value()))
+    n.entries()
+        .iter()
+        .find(|e| e.name().map(|k| k.value()) == Some("fail_to"))
+        .map(|e| val_str(e.value()))
 }
 
 fn val_str(v: &KdlValue) -> String {
@@ -482,11 +609,20 @@ fn edge_targets(c: &KdlNode) -> Vec<&str> {
     let name = c.name().value();
     let args: Vec<&KdlEntry> = c.entries().iter().filter(|e| e.name().is_none()).collect();
     match name {
-        "->" => args.first().and_then(|e| e.value().as_string()).into_iter().collect(),
+        "->" => args
+            .first()
+            .and_then(|e| e.value().as_string())
+            .into_iter()
+            .collect(),
         "calls" => args.iter().filter_map(|e| e.value().as_string()).collect(),
         "on" | "returns" | "check" => {
-            let i = args.iter().position(|e| e.value().as_string() == Some("->"));
-            i.and_then(|i| args.get(i + 1)).and_then(|e| e.value().as_string()).into_iter().collect()
+            let i = args
+                .iter()
+                .position(|e| e.value().as_string() == Some("->"));
+            i.and_then(|i| args.get(i + 1))
+                .and_then(|e| e.value().as_string())
+                .into_iter()
+                .collect()
         }
         _ => vec![],
     }
@@ -503,7 +639,11 @@ fn rename_in_node(n: &mut KdlNode, from: &str, to: &str, is_var: bool) -> bool {
                 touched = true;
             }
             KdlValue::String(s) if is_var && (s == from || is_when) => {
-                let new = if is_when { replace_word(s, from, to) } else { to.into() };
+                let new = if is_when {
+                    replace_word(s, from, to)
+                } else {
+                    to.into()
+                };
                 if new != *s {
                     set_str(e, &new);
                     touched = true;
@@ -572,7 +712,11 @@ mod tests {
         }
         impl Dir {
             pub fn new() -> Self {
-                let p = std::env::temp_dir().join(format!("duflow-test-{}-{}", std::process::id(), rand()));
+                let p = std::env::temp_dir().join(format!(
+                    "duflow-test-{}-{}",
+                    std::process::id(),
+                    rand()
+                ));
                 std::fs::create_dir_all(&p).unwrap();
                 Self { path: p }
             }
@@ -585,7 +729,12 @@ mod tests {
         fn rand() -> u128 {
             static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
             let seq = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed) as u128;
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() * 1000 + seq
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+                * 1000
+                + seq
         }
     }
 
@@ -594,12 +743,21 @@ mod tests {
     #[test]
     fn add_child_preserves_comments_and_indent() {
         let (d, mut w) = ws(&[("deploy/rolling.kdl", ROLLING)]);
-        w.apply(&Op::AddChild { id: "deploy.rolling.retry".into(), line: "-> \"deploy.rolling.create_instance\" when=\"deploy.attempts < 3\"".into() }).unwrap();
+        w.apply(&Op::AddChild {
+            id: "deploy.rolling.retry".into(),
+            line: "-> \"deploy.rolling.create_instance\" when=\"deploy.attempts < 3\"".into(),
+        })
+        .unwrap();
         w.commit().unwrap();
         let out = std::fs::read_to_string(d.path.join("deploy/rolling.kdl")).unwrap();
         assert!(out.starts_with("// rolling akışı\n"), "{out}");
         assert!(out.contains("// yorum"), "{out}");
-        assert!(out.contains("\n  -> \"deploy.rolling.create_instance\" when=\"deploy.attempts < 3\"\n}\n"), "{out}");
+        assert!(
+            out.contains(
+                "\n  -> \"deploy.rolling.create_instance\" when=\"deploy.attempts < 3\"\n}\n"
+            ),
+            "{out}"
+        );
     }
 
     #[test]
@@ -608,17 +766,37 @@ mod tests {
         let mut attrs = BTreeMap::new();
         attrs.insert("layer".into(), "domain".into());
         attrs.insert("desc".into(), "Bitti".into());
-        w.apply(&Op::AddNode { kind: "state".into(), id: "deploy.done".into(), attrs, children: vec!["-> \"ui.x\"".into()] }).unwrap();
+        w.apply(&Op::AddNode {
+            kind: "state".into(),
+            id: "deploy.done".into(),
+            attrs,
+            children: vec!["-> \"ui.x\"".into()],
+        })
+        .unwrap();
         w.commit().unwrap();
         let out = std::fs::read_to_string(d.path.join("deploy.kdl")).unwrap();
-        assert_eq!(out, "state \"deploy.done\" desc=\"Bitti\" layer=\"domain\" {\n  -> \"ui.x\"\n}\n");
+        assert_eq!(
+            out,
+            "state \"deploy.done\" desc=\"Bitti\" layer=\"domain\" {\n  -> \"ui.x\"\n}\n"
+        );
     }
 
     #[test]
     fn rename_updates_refs_and_moves_file() {
-        let (d, mut w) = ws(&[("deploy/rolling.kdl", ROLLING), ("vars.kdl", "var \"deploy.attempts\" type=\"int\"\n")]);
-        w.apply(&Op::Rename { from: "deploy.rolling.retry".into(), to: "deploy.again".into() }).unwrap();
-        w.apply(&Op::Rename { from: "deploy.attempts".into(), to: "deploy.tries".into() }).unwrap();
+        let (d, mut w) = ws(&[
+            ("deploy/rolling.kdl", ROLLING),
+            ("vars.kdl", "var \"deploy.attempts\" type=\"int\"\n"),
+        ]);
+        w.apply(&Op::Rename {
+            from: "deploy.rolling.retry".into(),
+            to: "deploy.again".into(),
+        })
+        .unwrap();
+        w.apply(&Op::Rename {
+            from: "deploy.attempts".into(),
+            to: "deploy.tries".into(),
+        })
+        .unwrap();
         w.commit().unwrap();
         assert!(!d.path.join("deploy/rolling.kdl").exists());
         let out = std::fs::read_to_string(d.path.join("deploy.kdl")).unwrap();
@@ -632,10 +810,25 @@ mod tests {
 
     #[test]
     fn rm_node_refuses_when_referenced() {
-        let (_d, mut w) = ws(&[("deploy/rolling.kdl", ROLLING), ("deploy.kdl", "state \"deploy.rolling.rollback\" layer=\"domain\"\n")]);
-        let err = w.apply(&Op::RmNode { id: "deploy.rolling.rollback".into(), force: false }).unwrap_err();
+        let (_d, mut w) = ws(&[
+            ("deploy/rolling.kdl", ROLLING),
+            (
+                "deploy.kdl",
+                "state \"deploy.rolling.rollback\" layer=\"domain\"\n",
+            ),
+        ]);
+        let err = w
+            .apply(&Op::RmNode {
+                id: "deploy.rolling.rollback".into(),
+                force: false,
+            })
+            .unwrap_err();
         assert!(matches!(err, EditError::Referenced(..)));
-        w.apply(&Op::RmNode { id: "deploy.rolling.rollback".into(), force: true }).unwrap();
+        w.apply(&Op::RmNode {
+            id: "deploy.rolling.rollback".into(),
+            force: true,
+        })
+        .unwrap();
         let prev = w.preview();
         assert!(!prev["deploy/rolling.kdl"].contains("rollback"));
     }
@@ -643,8 +836,17 @@ mod tests {
     #[test]
     fn set_attr_and_rm_edge() {
         let (_d, mut w) = ws(&[("deploy/rolling.kdl", ROLLING)]);
-        w.apply(&Op::SetAttr { id: "deploy.rolling.retry".into(), key: "desc".into(), value: "Yeni".into() }).unwrap();
-        w.apply(&Op::RmEdge { id: "deploy.rolling.retry".into(), to: "deploy.rolling.rollback".into() }).unwrap();
+        w.apply(&Op::SetAttr {
+            id: "deploy.rolling.retry".into(),
+            key: "desc".into(),
+            value: "Yeni".into(),
+        })
+        .unwrap();
+        w.apply(&Op::RmEdge {
+            id: "deploy.rolling.retry".into(),
+            to: "deploy.rolling.rollback".into(),
+        })
+        .unwrap();
         let out = &w.preview()["deploy/rolling.kdl"];
         assert!(out.contains("desc=\"Yeni\""), "{out}");
         assert!(!out.contains("rollback"), "{out}");

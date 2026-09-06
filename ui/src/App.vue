@@ -42,7 +42,7 @@ onMounted(async () => {
   </div>
   <div v-else class="loading">
     <span v-if="error" class="err mono">{{ error }}</span>
-    <span v-else>yükleniyor…</span>
+    <span v-else>loading…</span>
   </div>
 </template>
 

@@ -14,19 +14,19 @@ const diff = computed(() => graph.value?.diff)
 <template>
   <aside class="side">
     <section>
-      <h3>Değişkenler</h3>
+      <h3>Variables</h3>
       <div class="vars">
         <div v-for="v in vars" :key="v.id" class="var" :class="{ flash: state.flash === v.id }" :title="v.desc">
           <span><span class="k mono">{{ v.id }}</span> <span class="src">· {{ v.source ?? 'sets' }}</span></span>
           <input v-if="editing === v.id" class="v mono edit" :value="state.vars[v.id]" :list="'dl-' + v.id" autofocus
             @keydown.enter="commit(v.id, $event)" @keydown.esc="editing = ''" @blur="commit(v.id, $event)" />
-          <button v-else class="v mono" title="değeri değiştir (ya şöyle olsaydı)" @click="editing = v.id">{{ state.vars[v.id] ?? '—' }}</button>
+          <button v-else class="v mono" title="change value (what if)" @click="editing = v.id">{{ state.vars[v.id] ?? '—' }}</button>
           <datalist v-if="v.values?.length" :id="'dl-' + v.id"><option v-for="o in v.values" :key="o" :value="o" /></datalist>
         </div>
       </div>
     </section>
     <section>
-      <h3>Yürüyüş</h3>
+      <h3>Trail</h3>
       <div class="trail">
         <button v-for="(id, i) in trail" :key="i + id" class="mono" :class="{ last: i === trail.length - 1 }" @click="stopReplay(); rewindTo(id)">{{ id }}</button>
       </div>
@@ -39,7 +39,7 @@ const diff = computed(() => graph.value?.diff)
         <span class="chip changed">~{{ diff.changed.length }}</span>
       </div>
     </section>
-    <div class="hint">Sağdaki adaya gel, devamı ufukta belirir. Tıkla, akış oraya kayar. Geçmiş karta tıkla: geri sar. <kbd>←</kbd> geri, <kbd>⌘K</kbd> ara, <kbd>m</kbd> harita.</div>
+    <div class="hint">Hover a candidate on the right to preview what follows. Click to walk there. Click the past card to rewind. <kbd>←</kbd> back, <kbd>⌘K</kbd> search, <kbd>m</kbd> map.</div>
   </aside>
 </template>
 

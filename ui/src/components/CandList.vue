@@ -13,7 +13,7 @@ const grouped = computed(() => {
   if (ns.length <= 6 && !filter) return null
   const groups = new Map<string, Candidate[]>()
   for (const c of ns) {
-    const gk = c.diff === 'removed' ? 'artık yok' : c.cls === 'fail' ? 'hata dalları' : groupOf(c.to)
+    const gk = c.diff === 'removed' ? 'removed' : c.cls === 'fail' ? 'failure branches' : groupOf(c.to)
     if (!groups.has(gk)) groups.set(gk, [])
     groups.get(gk)!.push(c)
   }
@@ -23,7 +23,7 @@ const grouped = computed(() => {
     const list = f ? list0.filter((c) => c.to.includes(f) || (graph.value?.get(c.to)?.desc ?? '').toLowerCase().includes(f)) : list0
     if (!list.length) continue
     const open = props.interactive ? state.openGroups.has(name) || !!f : list.some((c) => c.to === props.selected)
-    out.push({ name, list, open, fail: name === 'hata dalları' || name === 'artık yok' })
+    out.push({ name, list, open, fail: name === 'failure branches' || name === 'removed' })
   }
   out.sort((a, b) => Number(a.fail) - Number(b.fail))
   return out
@@ -39,18 +39,18 @@ const key = (c: Candidate) => c.to + (c.via?.id ?? '')
 </script>
 
 <template>
-  <div v-if="!cands.length" class="empty">çıkış yok</div>
+  <div v-if="!cands.length" class="empty">no outgoing</div>
   <template v-else-if="!grouped">
     <Card v-for="c in cands" :key="key(c)" :id="c.to" :col="selected === c.to ? 'now' : 'next'" :cand="selected === c.to ? undefined : c" :hot="hot === c.to" :collapsed="!!selected && selected !== c.to" :from-height="fromHeights?.[c.to]" />
   </template>
   <template v-else>
-    <input v-if="interactive" class="nfilter mono" :class="{ collapsed: !!selected }" :placeholder="`${cands.length} çıkış · süz…`" v-model="state.filter" />
+    <input v-if="interactive" class="nfilter mono" :class="{ collapsed: !!selected }" :placeholder="`${cands.length} outgoing · filter…`" v-model="state.filter" />
     <template v-for="grp in grouped" :key="grp.name">
       <button class="ghead" :class="{ fail: grp.fail, collapsed: !!selected }" @click.stop="toggleGroup(grp.name)">
         <span class="mono">{{ grp.name }}</span><span>{{ grp.list.length }}</span>
       </button>
       <Card v-for="c in (grp.open ? grp.list : grp.list.slice(0, 2))" :key="key(c)" :id="c.to" :col="selected === c.to ? 'now' : 'next'" :cand="selected === c.to ? undefined : c" :hot="hot === c.to" :collapsed="!!selected && selected !== c.to" :from-height="fromHeights?.[c.to]" />
-      <button v-if="!grp.open && grp.list.length > 2" class="more" :class="{ collapsed: !!selected }" @click.stop="toggleGroup(grp.name)">+{{ grp.list.length - 2 }} daha</button>
+      <button v-if="!grp.open && grp.list.length > 2" class="more" :class="{ collapsed: !!selected }" @click.stop="toggleGroup(grp.name)">+{{ grp.list.length - 2 }} more</button>
     </template>
   </template>
 </template>
