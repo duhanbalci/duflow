@@ -1,8 +1,11 @@
 # `just release X.Y.Z` tag'i push'lar; bu workflow tag'den binary'leri derleyip GitHub Release açar.
 # Asset adı `duflow-v<ver>-<target>.tar.gz` — `duflow self-update` ve install.sh buna bağlı.
+# Build matrix main push'unda da koşar: Actions cache branch-scope'lu, tag koşusu yalnız main'in
+# cache'ini görür; main'de ısıtılmazsa her release sıfırdan derler. Release job'u sadece tag'de.
 name: release
 on:
   push:
+    branches: [main]
     tags: ["v*"]
 permissions:
   contents: write
@@ -29,6 +32,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - if: contains(matrix.target, 'musl')
         run: sudo apt-get update && sudo apt-get install -y musl-tools
       - run: cargo build --release -p duflow-cli --target ${{ matrix.target }}
@@ -45,6 +49,7 @@ jobs:
           name: ${{ matrix.target }}
           path: duflow-*.tar.gz*
   release:
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
     steps:
