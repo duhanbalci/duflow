@@ -37,7 +37,7 @@ install: build
 release version:
     #!/usr/bin/env sh
     set -eu
-    v="${{version}}"; v="${v#v}"
+    v="{{version}}"; v="${v#v}"
     [ -z "$(git status --porcelain)" ] || { echo "working tree dirty" >&2; exit 1; }
     sed -i '' "s/^version = \".*\"/version = \"$v\"/" Cargo.toml
     cargo update -w -q
