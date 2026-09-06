@@ -741,6 +741,8 @@ fn self_update(check: bool) -> Result<()> {
     b.repo_owner(REPO_OWNER)
         .repo_name(REPO_NAME)
         .bin_name("duflow")
+        // release.yml: tar.gz içinde `duflow-v<ver>-<target>/duflow`
+        .bin_path_in_archive("duflow-v{{ version }}-{{ target }}/duflow")
         .current_version(current)
         .show_output(false)
         .no_confirm(true)

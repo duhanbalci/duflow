@@ -1,9 +1,26 @@
 # duflow
 
-Version-controlled flow graph of a software system, kept in [KDL](https://kdl.dev) files next to the code.
-States, triggers, endpoints, checks, outcomes and variables live in `flows/*.kdl`; the graph is queried
-by AI (token-efficient CLI, deterministic write-back) and by humans (single-file interactive UI:
-walk, simulate, map, diff overlay).
+A version-controlled flow graph of your software system, written by hand (human or AI) in
+[KDL](https://kdl.dev) files that live next to the code. States, triggers, endpoints, checks,
+outcomes and variables go in `flows/*.kdl`; duflow lints the graph, answers questions about it
+from the CLI (token-efficient, `--json` everywhere), edits it deterministically, and renders an
+interactive single-file UI (walk, simulate, map, diff overlay).
+
+```kdl
+// flows/deploy/rolling.kdl
+state "deploy.rolling.wait_healthy" layer="domain" {
+  desc "Wait until the new instance is healthy"
+  on "instance.healthy" -> "deploy.rolling.route_switch"
+  on "instance.failed"  -> "deploy.rolling.retry"
+  on "timeout"          -> "deploy.rolling.retry"
+}
+
+state "deploy.rolling.retry" layer="domain" {
+  sets "deploy.attempts" "+1"
+  -> "deploy.rolling.create_instance" when="deploy.attempts < 3"
+  -> "deploy.rolling.rollback"        when="deploy.attempts >= 3"
+}
+```
 
 ## Install
 
@@ -11,45 +28,41 @@ walk, simulate, map, diff overlay).
 curl -fsSL https://raw.githubusercontent.com/duhanbalci/duflow/main/install.sh | sh
 ```
 
-Installs to `~/.local/bin` (override with `DUFLOW_INSTALL_DIR`). Pin a version with `DUFLOW_VERSION=0.1.0`.
-Prebuilt binaries: macOS (arm64, x86_64) and Linux (x86_64, arm64, static musl).
-
-From source: `cargo install --git https://github.com/duhanbalci/duflow duflow-cli`
-
-Update later with:
+Installs a prebuilt binary to `~/.local/bin` (macOS arm64/x86_64, Linux x86_64/arm64 static).
+`DUFLOW_INSTALL_DIR` changes the directory, `DUFLOW_VERSION=0.1.0` pins a version.
+Or build from source: `cargo install --git https://github.com/duhanbalci/duflow duflow-cli`.
 
 ```sh
-duflow self-update          # or --check
+duflow self-update               # upgrade to the latest release (--check only reports)
+duflow completions fish|zsh|bash # shell autocomplete for node IDs, vars, layers, git revs
 ```
-
-Shell completion (node IDs, vars, layers, git revs): `duflow completions fish|zsh|bash`.
 
 ## Usage
 
 ```sh
-duflow validate                       # lint: dangling refs, unreachable nodes, undefined vars
-duflow brief deploy.rolling           # one-shot summary of a node
-duflow prereq deploy.done             # what must happen to reach a node
-duflow path api.deploy deploy.done    # paths between nodes
-duflow search healthy                 # fuzzy search
+duflow validate                       # dangling refs, unreachable nodes, undefined vars
+duflow brief deploy.rolling.retry     # one-shot summary: how to get here, in/out edges, checks, vars
+duflow prereq deploy.done             # steps, checks and vars needed to reach a node
+duflow path api.deploy deploy.done    # shortest (or --all) paths between two nodes
+duflow search healthy                 # fuzzy search over IDs, descriptions, checks, vars
+duflow var deploy.attempts            # who sets it, who reads it
+duflow ls --layer api                 # list nodes (--kind, --layer, --prefix)
+
 duflow add state deploy.done --layer domain --desc "Done" --child '-> "deploy.status"'
-duflow edit deploy.done --set desc="..." --rm-edge deploy.status
+duflow edit deploy.done --set desc="..." --child 'on "ev" -> "x"' --rm-edge deploy.status
+duflow rename deploy.done deploy.finished
+duflow rm deploy.finished [--force]
+echo '[{"op":"add_child","id":"a","line":"-> \"b\""}]' | duflow apply -   # batch edits
+
 duflow diff main                      # graph diff against a git rev
 duflow ui serve                       # interactive UI on localhost:4646
-duflow ui build -o duflow.html        # single-file static UI
+duflow ui build -o duflow.html --diff main   # single-file static UI with diff overlay
 ```
 
-Every query takes `--json`. `flows/` is searched upward from the cwd; pass `-d <dir>` otherwise.
+`flows/` is searched upward from the current directory; pass `-d <dir>` otherwise.
 
-Format and design notes: `docs/design.md`. AI usage guide: `.claude/skills/duflow/SKILL.md`.
-
-## Release
-
-```sh
-just release 0.2.0
-```
-
-Bumps the workspace version, tags `v0.2.0` and pushes; GitHub Actions builds the binaries and publishes the release.
+Format and design: [`docs/design.md`](docs/design.md). Guide for AI agents:
+[`.claude/skills/duflow/SKILL.md`](.claude/skills/duflow/SKILL.md).
 
 ## License
 
