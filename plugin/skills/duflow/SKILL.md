@@ -64,7 +64,7 @@ project "duploy" {
 
 With the plugin installed, editing a watched file adds a one-time reminder; trying to stop (or `git commit`)
 after changing watched files without touching `flows/` is blocked until the graph is updated or you state in
-one sentence why it is unaffected. Lint errors in `flows/` block stopping and committing.
+one sentence why it is unaffected. Lint errors in files you changed block stopping (except `unreachable`, which is cross-file and transient while other agents write); any error blocks `git commit`.
 
 ## Format (KDL), cheatsheet
 
@@ -98,7 +98,8 @@ event  "instance.healthy" layer="domain" desc="..."         # external/async sou
 var   "deploy.attempts" type="int"                          # global var (dotted): written via sets, read across groups
 var   "role" type="enum" source="session" values="admin member"   # external source
 check "has_success_build" desc="..." -> "ui.toast.no_build"        # default fail target
-perm  "deploy.trigger" scope="project" deny=404 desc="..." -> "ui.toast.not_found"
+check "service_not_frozen" desc="..." outcome="toast: service frozen"   # default terminal text; usages need no repeat
+perm  "deploy.trigger" scope="project" deny=404 desc="..." outcome="toast: not found"   # (or -> "node")
 root  "ui.login"                                            # entry point; every node must be reachable from a root
 root  "network.liveness" every="30s"                        # periodic entry (reconciler / liveness loop)
 view  "deploy_from_ui" from="ui.login" to="deploy.done"     # saved query, not data
@@ -109,8 +110,8 @@ Rules:
 - ID `a-z0-9_` + dots; dot = hierarchy/group. File: `a.b` → `a.kdl`; `a.b.c…` → `a/b.kdl`. One definition per ID; other files reference by ID.
 - Layer `layer="ui|api|domain"` (project extends in `flow.kdl`).
 - Guard `when="..."` is a string; not interpreted. Dotted names must be defined `var`s; dotless names are local counters that only need a `sets` in the same scope (the ID prefix up to the last dot: `restore.snapshot` and `restore.applying` share `restore`). Declare a global `var` only for external sources or values read across scopes.
-- Several `->` without a guard: either/or branches get `case="..."`; steps that all run in order get `seq=1`, `seq=2`, …; otherwise `ambiguous_transition`. Don't fake `case=` labels for sequential steps. Duplicate `case`/`seq` on one node warns.
-- Toasts/logs/dead ends are not states: use `outcome="..."` on the check, `returns`, or a target-less `-> outcome="..." when="..."`.
+- Several `->` without a guard: either/or branches get `case="..."`; steps that all run in order get `seq=1`, `seq=2`, …; otherwise `ambiguous_transition`. Don't fake `case=` labels for sequential steps. Duplicate `case`/`seq` on one node warns; mixing `seq=` and `case=` on one node warns (`mixed_branching`): put the branching on the last step's node.
+- Toasts/logs/dead ends are not states: use `outcome="..."` on the check, `returns`, or a target-less `-> outcome="..." when="..."`. Put the common text once on the `check`/`perm` definition; a usage only overrides.
 - Events: `event` nodes have no outgoing `->`; consumers use `on`. Model the delivery chain (emit → SSE → UI refresh) once in its own infrastructure nodes, never as direct event → ui edges.
 - Endpoints with no UI (admin/CLI): `entry="cli"` on the call instead of a fake state or root.
 - Permissions: define `perm`, use `requires`. Don't write `check "perm:x"` by hand.
@@ -120,4 +121,4 @@ Rules:
 - Don't invent roots: a node with incoming edges is not an entry point (`root_has_incoming`).
 
 ## Common lint errors
-`dangling_ref` target missing · `unreachable` no path from a root/entry · `unknown_var` undefined dotted name in a guard · `local_var_never_set` local counter never `sets` in its scope · `var_never_set` read but no `sets`/`source` · `call_no_returns` · `id_path_mismatch` wrong file · `unknown_check` · `unknown_perm` · `ambiguous_transition` add `case=`/`seq=`/`when=` · `duplicate_case`/`duplicate_seq` · `event_has_transition` · `root_has_incoming` · `too_many_roots` · `src_missing`/`src_symbol_missing`/`src_symbol_unchecked`.
+`dangling_ref` target missing · `unreachable` no path from a root/entry · `unknown_var` undefined dotted name in a guard · `local_var_never_set` local counter never `sets` in its scope · `var_never_set` read but no `sets`/`source` · `call_no_returns` · `id_path_mismatch` wrong file · `unknown_check` · `unknown_perm` · `ambiguous_transition` add `case=`/`seq=`/`when=` · `duplicate_case`/`duplicate_seq`/`mixed_branching` · `event_has_transition` · `root_has_incoming` · `too_many_roots` · `src_missing`/`src_symbol_missing`/`src_symbol_unchecked`.

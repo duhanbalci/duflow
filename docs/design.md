@@ -91,7 +91,7 @@ Kenar node'un içinde inline yazılır, ayrı varlık değil:
 | `calls "call.id"` | action → call |
 | `returns 202 -> "x"` / `returns 200 case="pr" -> "x"` / `returns 409 code="..." -> "x"` | call çıkışları; aynı status birden çok sonuca `case` ile ayrılır |
 | `returns 409 code="..." outcome="toast: volume in use"` | node'suz terminal çıkış (toast, log satırı). UI'da yaprak, aday değil |
-| `check "name" fail=409 code="..." [-> "x" \| outcome="..."]` | ön kontrol; `->` yoksa fail hedefi check tanımındaki **varsayılan**, kullanımdaki `->` onu ezer |
+| `check "name" fail=409 code="..." [-> "x" \| outcome="..."]` | ön kontrol; `->`/`outcome=` yoksa fail sonu check tanımındaki **varsayılan** (`-> "x"` ya da `outcome="..."`), kullanımdaki onu ezer. Kullanım `outcome=` dediyse tanımın hedefine kenar çizilmez |
 | `requires "perm.id" [fail=404 code="..."] [-> "x" \| outcome="..."]` | izin; `perm` tanımındaki `deny` fail kodu, `fail_to` varsayılan hedef; kullanım `fail=`/`code=` ile ezer (registry'nin 404 NAME_UNKNOWN dönmesi gibi) |
 | `sets "var.id" "+1"` / `sets "retry" "0"` | değişken yazımı; değer string, yorumlanmaz |
 
@@ -199,6 +199,7 @@ Kurallar:
 | Yazılan ama hiç okunmayan `var` | uyarı |
 | Birden fazla `when`'siz, `case`'siz **ve** `seq`'siz `->` (`ambiguous_transition`) | uyarı (belirsizlik) |
 | Aynı node'da tekrar eden `case=` / `seq=` (`duplicate_case`, `duplicate_seq`) | uyarı |
+| Aynı node'da `seq=` ile `case=` karışık (`mixed_branching`): dal son seq adımının node'una | uyarı |
 | `event` node'undan `->`/`calls`/`returns` çıkıyor (`event_has_transition`) | uyarı |
 | `on` hedefi hiç yok (`unknown_event`) | uyarı |
 | `check`/`perm` tanımı var, hiç kullanılmıyor | uyarı |

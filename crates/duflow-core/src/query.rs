@@ -136,7 +136,7 @@ impl Brief {
                     Some(p) => format!("requires {p}"),
                     None => c.name.clone(),
                 };
-                let end = match &c.outcome {
+                let end = match g.effective_outcome(c) {
                     Some(o) => format!(" ⇥ {o}"),
                     None => String::new(),
                 };

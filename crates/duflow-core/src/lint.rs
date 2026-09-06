@@ -232,7 +232,7 @@ pub fn lint(g: &Graph) -> Vec<Diagnostic> {
                     ),
                 }
             }
-            if c.outcome.is_some() {
+            if g.effective_outcome(c).is_some() {
                 continue;
             }
             let target = c.to.clone().or_else(|| def.and_then(|x| x.fail_to.clone()));
@@ -363,6 +363,26 @@ pub fn lint(g: &Graph) -> Vec<Diagnostic> {
                     format!("`{}`: case `{c}` used more than once", n.id),
                 );
             }
+        }
+        // aynı node'da hem sıra hem dal: dallanma son seq adımının node'una ait
+        let has_seq = n.edges.iter().any(|e| e.seq.is_some());
+        let has_case = n
+            .edges
+            .iter()
+            .any(|e| matches!(e.kind, EdgeKind::Plain) && e.case.is_some() && e.seq.is_none());
+        if has_seq && has_case {
+            push(
+                &mut d,
+                Level::Warning,
+                "mixed_branching",
+                &n.file,
+                n.line,
+                Some(&n.id),
+                format!(
+                    "`{}` mixes seq= steps with case= branches; move the branching to the last step's node",
+                    n.id
+                ),
+            );
         }
         let mut seen_seq: BTreeSet<u32> = BTreeSet::new();
         for e in &n.edges {
@@ -879,6 +899,41 @@ state "a.start" desc="s" { -> "a.mid" }
                 .any(|x| x.code == "duplicate_seq" && x.id.as_deref() == Some("a.x")),
             "{d:?}"
         );
+    }
+
+    #[test]
+    fn definition_outcome_is_the_default_and_usage_outcome_suppresses_the_edge() {
+        let g = mk(&[
+            (
+                "a.kdl",
+                &format!(
+                    "{BASE}\ncall \"a.mid\" desc=\"m\" {{\n  check \"has_ip\"\n  check \"other\" outcome=\"toast: mine\"\n  returns 200 -> \"a.start\"\n}}\nstate \"a.nf\" desc=\"n\"\n"
+                ),
+            ),
+            (
+                "checks.kdl",
+                "check \"has_ip\" desc=\"ip\" outcome=\"toast: no ip\"\ncheck \"other\" desc=\"o\" -> \"a.nf\"\n",
+            ),
+        ]);
+        let d = lint(&g);
+        assert!(!codes(&d).contains(&"check_no_fail_target"), "{d:?}");
+        // other: tanımda fail_to var ama kullanım outcome= dedi → a.nf'ye kenar yok
+        assert!(g.outgoing("a.mid").iter().all(|e| e.to != "a.nf"), "{:?}", g.outgoing("a.mid"));
+        assert_eq!(
+            g.effective_outcome(&g.nodes["a.mid"].checks[0]).as_deref(),
+            Some("toast: no ip")
+        );
+    }
+
+    #[test]
+    fn mixing_seq_and_case_on_one_node_warns() {
+        let g = mk(&[(
+            "a.kdl",
+            &format!(
+                "{BASE}\nstate \"a.mid\" desc=\"m\" {{\n  -> \"a.x\" seq=1\n  -> \"a.y\" case=\"y\"\n}}\nstate \"a.x\" desc=\"x\"\nstate \"a.y\" desc=\"y\"\n"
+            ),
+        )]);
+        assert!(codes(&lint(&g)).contains(&"mixed_branching"));
     }
 
     #[test]

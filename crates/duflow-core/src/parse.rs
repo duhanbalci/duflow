@@ -133,6 +133,7 @@ pub fn parse_file(file: &str, src: &str) -> Result<FileItems, ParseError> {
                     scope: prop_str(node, "scope"),
                     deny: prop_u16(node, "deny"),
                     fail_to: arrow_target(node).or_else(|| prop_str(node, "fail_to")),
+                    outcome: prop_str(node, "outcome"),
                     file: file.into(),
                     line: cx.line(node),
                 });
@@ -428,6 +429,7 @@ fn parse_check(cx: &Ctx, node: &KdlNode) -> Result<CheckDef, ParseError> {
             .map(|s| s.split_whitespace().map(String::from).collect())
             .unwrap_or_default(),
         fail_to: arrow_target(node).or_else(|| prop_str(node, "fail_to")),
+        outcome: prop_str(node, "outcome"),
         file: cx.file.into(),
         line: cx.line(node),
     })
@@ -589,6 +591,17 @@ state "purge.start" desc="x" {
         let c = &it.nodes[0].checks[0];
         assert_eq!(c.fail, Some(404));
         assert_eq!(c.code.as_deref(), Some("NAME_UNKNOWN"));
+    }
+
+    #[test]
+    fn definitions_accept_a_default_outcome() {
+        let it = parse_file(
+            "checks.kdl",
+            "check \"has_ip\" desc=\"ip\" outcome=\"toast: no ip\"\nperm \"x\" deny=403 outcome=\"toast: forbidden\"\n",
+        )
+        .unwrap();
+        assert_eq!(it.checks[0].outcome.as_deref(), Some("toast: no ip"));
+        assert_eq!(it.perms[0].outcome.as_deref(), Some("toast: forbidden"));
     }
 
     #[test]

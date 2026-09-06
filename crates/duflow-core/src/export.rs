@@ -124,12 +124,12 @@ pub fn export<'a>(g: &'a Graph, diff: Option<&GraphDiff>) -> Export<'a> {
                 .checks
                 .iter()
                 .filter_map(|c| {
-                    c.outcome.as_ref().map(|t| ExportOutcome {
+                    g.effective_outcome(c).map(|t| ExportOutcome {
                         label: match c.fail {
                             Some(f) => format!("{} ✗ {f}", c.name),
                             None => format!("{} ✗", c.name),
                         },
-                        text: t.clone(),
+                        text: t,
                         class: "fail",
                     })
                 })

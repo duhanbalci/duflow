@@ -370,7 +370,7 @@ fn stop(dir: &Path, repo: &Repo, session: &str, input: &Value) -> Result<Option<
     };
     let (code, flows_changed) = drift(dir, repo, &base)?;
     let errors = if flows_changed {
-        lint_errors(dir, Some(&changed_flow_files(dir, &base)))
+        stop_blocking(lint_errors(dir, Some(&changed_flow_files(dir, &base))))
     } else {
         vec![]
     };
@@ -402,6 +402,15 @@ fn stop(dir: &Path, repo: &Repo, session: &str, input: &Value) -> Result<Option<
         return Ok(None);
     }
     Ok(Some(json!({ "decision": "block", "reason": reason })))
+}
+
+/// Stop'ta bloklayan hatalar: `unreachable` dosyalar arası ve paralel yazımda geçici (başka ajan
+/// kenarı henüz yazmadı), o yüzden Stop'ta değil yalnız `git commit`'te bloklar.
+fn stop_blocking(errors: Vec<String>) -> Vec<String> {
+    errors
+        .into_iter()
+        .filter(|e| !e.contains("[unreachable]"))
+        .collect()
 }
 
 fn pre_bash(dir: &Path, repo: &Repo, session: &str, input: &Value) -> Result<Option<Value>> {
@@ -493,6 +502,17 @@ mod tests {
         let only: BTreeSet<String> = ["deploy.kdl".to_string()].into();
         assert_eq!(scoped_errors(diags.clone(), Some(&only)).len(), 1);
         assert_eq!(scoped_errors(diags, None).len(), 2);
+    }
+
+    #[test]
+    fn stop_ignores_unreachable_but_keeps_local_errors() {
+        let errs = vec![
+            "error a.kdl:1 [unreachable] `a.x` is not reachable from any root".to_string(),
+            "error a.kdl:2 [dangling_ref] `a.x` → `a.y`: target not defined".to_string(),
+        ];
+        let kept = stop_blocking(errs);
+        assert_eq!(kept.len(), 1);
+        assert!(kept[0].contains("dangling_ref"));
     }
 
     #[test]

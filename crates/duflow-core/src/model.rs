@@ -239,6 +239,9 @@ pub struct CheckDef {
     /// Varsayılan fail hedefi.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fail_to: Option<String>,
+    /// Varsayılan node'suz son (`outcome="toast: ..."`); kullanım `->`/`outcome=` yazmazsa bu.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub outcome: Option<String>,
     pub file: String,
     pub line: usize,
 }
@@ -257,6 +260,8 @@ pub struct PermDef {
     pub deny: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fail_to: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub outcome: Option<String>,
     pub file: String,
     pub line: usize,
 }

@@ -131,6 +131,7 @@ impl Graph {
                 desc: p.desc.clone(),
                 reads: vec![],
                 fail_to: p.fail_to.clone(),
+                outcome: p.outcome.clone(),
                 file: p.file.clone(),
                 line: p.line,
             });
@@ -174,6 +175,10 @@ impl Graph {
             })
             .collect();
         for c in &n.checks {
+            // kullanım `outcome=` yazdıysa kenar yok; `->` yoksa tanımın fail_to'su (outcome'u değil)
+            if c.outcome.is_some() {
+                continue;
+            }
             let to =
                 c.to.clone()
                     .or_else(|| self.checks.get(&c.name).and_then(|d| d.fail_to.clone()));
@@ -421,6 +426,22 @@ impl Graph {
             .values()
             .filter(|n| local_group(&n.id) == group && n.sets.iter().any(|s| s.var == name))
             .collect()
+    }
+
+    /// Bir check kullanımının etkin node'suz sonu: kullanımdaki `outcome=`, yoksa (`->` de yoksa)
+    /// tanımdaki `outcome=`.
+    pub fn effective_outcome(&self, c: &CheckUse) -> Option<String> {
+        if c.outcome.is_some() {
+            return c.outcome.clone();
+        }
+        if c.to.is_some() {
+            return None;
+        }
+        let def = self.checks.get(&c.name)?;
+        if def.fail_to.is_some() {
+            return None;
+        }
+        def.outcome.clone()
     }
 
     /// Bir check'i kullanan call'lar.
