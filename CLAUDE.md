@@ -38,7 +38,7 @@ just ui-dev        # Vite dev server (localhost:5173), public/duflow.json'u yük
 just ui-build      # tek dosya UI → crates/duflow-cli/ui-dist/index.html (sonra cargo build gerekir)
 just try           # Duploy flows'u ile validate + brief örneği
 cargo run -p duflow-cli -- -d ~/dev/duploy/flows validate
-just release 0.2.0 # Cargo.toml bump + tag + push; Actions binary'leri derleyip release açar
+just release 0.2.0 # Cargo.toml+plugin bump, tag, push; ardından lokal binary (install) + skill/plugin (sync-local) güncellenir
 ```
 
 Repo: github.com/duhanbalci/duflow (public). Release asset adı `duflow-v<ver>-<target>.tar.gz`;

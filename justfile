@@ -30,11 +30,25 @@ try dir="../duploy/flows":
 serve dir="../duploy/flows":
     cargo run -q -p duflow-cli -- -d {{dir}} ui serve
 
+# Lokal binary'yi güncelle (macOS: üstüne cp imzayı bozar → rm + cp + codesign)
 install: build
-    cp target/release/duflow ~/.cargo/bin/duflow
+    #!/usr/bin/env sh
+    set -eu
+    for p in ~/.cargo/bin/duflow ~/.local/bin/duflow; do
+        [ -d "$(dirname "$p")" ] || continue
+        rm -f "$p"; cp target/release/duflow "$p"
+        [ "$(uname)" = Darwin ] && codesign -s - -f "$p" 2>/dev/null || true
+    done
+    duflow --version
 
-# Sürüm çıkar: Cargo.toml bump + commit + tag + push; release workflow gerisini yapar
-release version:
+# Kurulu skill kopyaları + Claude Code plugin'ini güncelle (marketplace GitHub main'den okur)
+sync-local:
+    duflow skill install
+    claude plugin marketplace update duflow
+    claude plugin update duflow@duflow
+
+# Sürüm çıkar: Cargo.toml + plugin bump, commit, tag, push; sonra lokal binary/skill/plugin güncellenir
+release version: && install sync-local
     #!/usr/bin/env sh
     set -eu
     v="{{version}}"; v="${v#v}"
