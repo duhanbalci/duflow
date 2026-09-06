@@ -21,6 +21,8 @@ duflow/
 ├── ui/                  # Vue 3 + Vite + TS. src/graph.ts (veri + saf sorgular), src/walk.ts (store), components/{TopBar,Walk,Card,SidePanel,MapView}.vue
 │   └── public/duflow.json   # dev'de yüklenen örnek export (`duflow export > ui/public/duflow.json`)
 ├── docs/design.md       # spec
+├── install.sh           # curl | sh kurulum; GitHub Release asset'ini indirir
+├── .github/workflows/   # ci.yml (test), release.yml (v* tag → 4 hedef binary + GitHub Release)
 └── .claude/skills/duflow/SKILL.md   # AI için kullanım rehberi (format + CLI), İngilizce
 ```
 
@@ -33,7 +35,11 @@ just ui-dev        # Vite dev server (localhost:5173), public/duflow.json'u yük
 just ui-build      # tek dosya UI → crates/duflow-cli/ui-dist/index.html (sonra cargo build gerekir)
 just try           # Duploy flows'u ile validate + brief örneği
 cargo run -p duflow-cli -- -d ~/dev/duploy/flows validate
+just release 0.2.0 # Cargo.toml bump + tag + push; Actions binary'leri derleyip release açar
 ```
+
+Repo: github.com/duhanbalci/duflow (public). Release asset adı `duflow-v<ver>-<target>.tar.gz`;
+`duflow self-update` (self_update crate, ureq+rustls) ve `install.sh` bu ada bağlı — değiştirme.
 
 ## Kurallar
 

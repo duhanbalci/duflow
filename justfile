@@ -32,3 +32,18 @@ serve dir="../duploy/flows":
 
 install: build
     cp target/release/duflow ~/.cargo/bin/duflow
+
+# Sürüm çıkar: Cargo.toml bump + commit + tag + push; release workflow gerisini yapar
+release version:
+    #!/usr/bin/env sh
+    set -eu
+    v="${{version}}"; v="${v#v}"
+    [ -z "$(git status --porcelain)" ] || { echo "working tree dirty" >&2; exit 1; }
+    sed -i '' "s/^version = \".*\"/version = \"$v\"/" Cargo.toml
+    cargo update -w -q
+    cargo build -q -p duflow-cli
+    git add Cargo.toml Cargo.lock
+    git commit -qm "chore: release v$v"
+    git tag "v$v"
+    git push origin main "v$v"
+    echo "pushed v$v; see https://github.com/duhanbalci/duflow/actions"

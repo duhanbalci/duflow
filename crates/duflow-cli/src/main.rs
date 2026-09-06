@@ -141,7 +141,17 @@ enum Cmd {
         #[arg(long)]
         print: bool,
     },
+    /// Update duflow to the latest GitHub release (--check only reports)
+    SelfUpdate {
+        /// Only check, do not install
+        #[arg(long)]
+        check: bool,
+    },
 }
+
+/// Release'lerin yayınlandığı GitHub deposu; asset adı `duflow-v<ver>-<target>.tar.gz`.
+const REPO_OWNER: &str = "duhanbalci";
+const REPO_NAME: &str = "duflow";
 
 #[derive(Subcommand)]
 enum UiCmd {
@@ -220,9 +230,17 @@ fn find_dir(explicit: Option<PathBuf>) -> Result<PathBuf> {
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
-    let dir = find_dir(cli.dir.clone())?;
     let json = cli.json;
+    // flows/ gerektirmeyen komutlar
+    if let Cmd::SelfUpdate { check } = cli.cmd {
+        return self_update(check);
+    }
+    let dir = match &cli.cmd {
+        Cmd::Completions { .. } => PathBuf::new(),
+        _ => find_dir(cli.dir.clone())?,
+    };
     match cli.cmd {
+        Cmd::SelfUpdate { .. } => unreachable!(),
         Cmd::Validate => {
             let g = Graph::load(&dir)?;
             let d = lint(&g);
@@ -713,4 +731,36 @@ fn complete_rev(current: &OsStr) -> Vec<CompletionCandidate> {
         v.push(cand("HEAD", None));
     }
     v
+}
+
+/// GitHub Releases'tan güncelle. `check`: sadece sürüm karşılaştır.
+fn self_update(check: bool) -> Result<()> {
+    use self_update::backends::github::Update;
+    let current = env!("CARGO_PKG_VERSION");
+    let mut b = Update::configure();
+    b.repo_owner(REPO_OWNER)
+        .repo_name(REPO_NAME)
+        .bin_name("duflow")
+        .current_version(current)
+        .show_output(false)
+        .no_confirm(true)
+        .show_download_progress(true);
+    let u = b.build().context("configure updater")?;
+    let releases = u.get_latest_release().context("fetch latest release")?;
+    if !releases.is_update_available().context("compare versions")? {
+        println!("duflow {current} is up to date");
+        return Ok(());
+    }
+    if check {
+        let latest = releases.latest().map(|r| r.version()).unwrap_or("?");
+        println!("duflow {current} -> {latest} available (run `duflow self-update`)");
+        return Ok(());
+    }
+    let status = u.update().context("update")?;
+    if status.is_updated() {
+        println!("updated duflow {current} -> {}", status.version());
+    } else {
+        println!("duflow {current} is up to date");
+    }
+    Ok(())
 }
