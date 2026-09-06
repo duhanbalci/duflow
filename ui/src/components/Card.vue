@@ -101,12 +101,13 @@ const isRoot = computed(() => g.value?.roots.includes(props.id))
 </template>
 
 <style scoped>
-.card { position: relative; box-sizing: border-box; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; text-align: left; display: flex; flex-direction: column; gap: 6px; width: 100%; transition: opacity .22s, border-color .18s, box-shadow .18s; user-select: none; }
+.card { position: relative; box-sizing: border-box; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; text-align: left; display: flex; flex-direction: column; gap: 6px; width: 100%; transition: opacity .3s, border-color .35s, box-shadow .35s, background-color .35s; user-select: none; }
+.card .id, .card .desc, .card .kind, .card .file, .card .lbl, .card .chip, .card .via { transition: color .35s, background-color .35s, opacity .3s; }
 .kind { display: flex; align-items: center; gap: 6px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 .kind .root { font-size: 10px; color: var(--good); border: 1px solid var(--good); border-radius: 4px; padding: 0 4px; letter-spacing: 0; }
 .kind .chip { text-transform: none; letter-spacing: 0; margin-left: auto; }
 .id { font-size: 13px; color: var(--text); word-break: break-all; }
-.desc { color: var(--muted); font-size: 13px; transition: color .3s; }
+.desc { color: var(--muted); font-size: 13px; }
 .lbls { display: flex; flex-wrap: wrap; gap: 4px 8px; }
 .lbl { font-size: 11px; color: var(--muted); }
 .lbl.guard { color: var(--domain); } .lbl.fail { color: var(--bad); }

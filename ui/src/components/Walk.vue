@@ -97,7 +97,7 @@ function onShiftEnd(e: TransitionEvent) {
   phase.value = ''
   shift.value = 0
   nextTick(() => {
-    drawWires()
+    drawWires(true)
     void track.value?.offsetHeight   // sıfırlanmış transform layout'a işlensin, sonra transition'lar geri
     noTransition.value = false; animating.value = false
   })
@@ -112,7 +112,7 @@ watch([() => state.hiddenLayers, () => state.role, () => state.filter, () => sta
 // yeni kenar solarak belirir, giden solarak gider. Böylece commit anında tel "çat" diye değişmez.
 const wireEls = new Map<string, SVGElement>()
 const SVGNS = 'http://www.w3.org/2000/svg'
-function drawWires() {
+function drawWires(instantRemove = false) {
   const svg = wires.value, tr = track.value
   if (!svg || !tr) return
   const tb = tr.getBoundingClientRect()
@@ -169,12 +169,13 @@ function drawWires() {
   if (leftIn.value) link(q('left', leftIn.value), pastEl, true)
   if (phase.value === 'back') { for (const c of all('now')) link(pastEl, c, c.dataset.id === current.value) }
   else if (pastEl) link(pastEl, nowEl, true, phase.value === 'fwd' ? 0 : 1)
-  for (const c of all('next')) link(nowEl, c, c.dataset.id === hot.value || c.dataset.id === picked.value, phase.value === 'back' ? .3 : 1)
+  for (const c of all('next')) link(nowEl, c, c.dataset.id === hot.value || c.dataset.id === picked.value, phase.value === 'back' ? 0 : 1)
   if (picked.value) { const p = q('next', picked.value); for (const c of all('right')) link(p, c, false) }
   else if (hot.value) { const h = q('next', hot.value); for (const c of all('right')) link(h, c, false) }
   for (const [k, el] of wireEls) {
     if (seen.has(k)) continue
     wireEls.delete(k)
+    if (instantRemove) { el.remove(); continue }   // bant sıfırlandı: eski koordinatlar artık yanlış
     el.style.opacity = '0'
     setTimeout(() => el.remove(), 340)
   }
