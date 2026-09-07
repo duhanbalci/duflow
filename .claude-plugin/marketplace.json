@@ -7,7 +7,7 @@
       "name": "duflow",
       "description": "System flow graph skill + hooks that keep flows/ in sync with the code",
       "source": "./plugin",
-      "version": "0.5.3"
+      "version": "0.5.5"
     }
   ]
 }

@@ -444,7 +444,7 @@ dependencies = [
 
 [[package]]
 name = "duflow-cli"
-version = "0.5.3"
+version = "0.5.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -458,7 +458,7 @@ dependencies = [
 
 [[package]]
 name = "duflow-core"
-version = "0.5.3"
+version = "0.5.5"
 dependencies = [
  "kdl",
  "serde",
