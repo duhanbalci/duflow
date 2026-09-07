@@ -1,12 +1,16 @@
 <script setup lang="ts">
-// Map: grup seviyesi genel bakış. Katmanlı yerleşim: root gruplarından BFS derinliği = sütun.
+// Map: grup seviyesi genel bakış. Yerleşim: SCC condensation + longest-path katmanı
+// (düz BFS hub'lar yüzünden 2 sütuna çöküyordu), sütun başına MAXROW kart, taşan katman sarılır.
+// Teller varsayılan çok soluk; bir karta hover → yalnız o grubun in/out telleri parlar, gerisi söner.
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { graph, startAt } from '../walk'
 import { topOf, groupOf } from '../graph'
 
 const level = ref<string | null>(null) // null: üst gruplar; "deploy": deploy'un alt grupları
+const focus = ref<string | null>(null) // hover'daki grup (yerel, store'a koyma)
 const stage = ref<HTMLElement>()
 const svg = ref<SVGSVGElement>()
+const MAXROW = 9
 
 interface GNode { key: string; label: string; count: number; layers: Record<string, number>; nodes: string[]; diff: { a: number; r: number; c: number } }
 interface GEdge { from: string; to: string; n: number }
@@ -33,27 +37,69 @@ const model = computed(() => {
     if (!edges.has(k)) edges.set(k, { from: a, to: b, n: 0 })
     edges.get(k)!.n++
   }
-  // sütun = BFS derinliği (root gruplarından)
-  const depth = new Map<string, number>()
-  const q: string[] = []
-  for (const r of [...g.roots, ...Object.keys(g.entries)]) { const k = keyOf(r); if (nodes.has(k) && !depth.has(k)) { depth.set(k, 0); q.push(k) } }
+  const out = new Map<string, GEdge[]>()
+  for (const k of nodes.keys()) out.set(k, [])
+  for (const e of edges.values()) out.get(e.from)!.push(e)
+
+  // SCC (Tarjan, iteratif) → döngüler tek düğüme iner
+  const comp = new Map<string, number>()
+  {
+    const ix = new Map<string, number>(), low = new Map<string, number>(), on = new Set<string>()
+    const st: string[] = []; let idx = 0, c = 0
+    for (const root of nodes.keys()) {
+      if (ix.has(root)) continue
+      const work: [string, number][] = [[root, 0]]
+      while (work.length) {
+        const fr = work[work.length - 1]
+        const [v, i] = fr
+        if (i === 0) { ix.set(v, idx); low.set(v, idx); idx++; st.push(v); on.add(v) }
+        const es = out.get(v)!
+        if (i < es.length) {
+          fr[1]++
+          const w = es[i].to
+          if (!ix.has(w)) work.push([w, 0])
+          else if (on.has(w)) low.set(v, Math.min(low.get(v)!, ix.get(w)!))
+        } else {
+          work.pop()
+          if (work.length) { const p = work[work.length - 1][0]; low.set(p, Math.min(low.get(p)!, low.get(v)!)) }
+          if (low.get(v) === ix.get(v)) { let w: string; do { w = st.pop()!; on.delete(w); comp.set(w, c) } while (w !== v); c++ }
+        }
+      }
+    }
+  }
+  // condensation üzerinde longest-path katmanı
+  const cOut = new Map<number, Set<number>>(), indeg = new Map<number, number>()
+  for (const c of comp.values()) { if (!cOut.has(c)) cOut.set(c, new Set()); if (!indeg.has(c)) indeg.set(c, 0) }
+  for (const e of edges.values()) {
+    const a = comp.get(e.from)!, b = comp.get(e.to)!
+    if (a !== b && !cOut.get(a)!.has(b)) { cOut.get(a)!.add(b); indeg.set(b, indeg.get(b)! + 1) }
+  }
+  const lv = new Map<number, number>()
+  const q: number[] = []
+  for (const [c, d] of indeg) if (!d) { lv.set(c, 0); q.push(c) }
   while (q.length) {
-    const cur = q.shift()!
-    for (const e of edges.values()) if (e.from === cur && !depth.has(e.to)) { depth.set(e.to, depth.get(cur)! + 1); q.push(e.to) }
+    const c = q.shift()!
+    for (const n of cOut.get(c)!) {
+      lv.set(n, Math.max(lv.get(n) ?? 0, lv.get(c)! + 1))
+      indeg.set(n, indeg.get(n)! - 1)
+      if (!indeg.get(n)) q.push(n)
+    }
   }
-  let maxd = 0
-  for (const d of depth.values()) maxd = Math.max(maxd, d)
-  const cols: GNode[][] = []
+  const buckets = new Map<number, GNode[]>()
   for (const n of nodes.values()) {
-    const d = depth.get(n.key) ?? maxd + 1
-    ;(cols[d] ??= []).push(n)
+    const d = lv.get(comp.get(n.key)!) ?? 0
+    ;(buckets.get(d) ?? buckets.set(d, []).get(d)!).push(n)
   }
-  for (const c of cols) c?.sort((a, b) => b.count - a.count)
-  return { nodes: [...nodes.values()], edges: [...edges.values()], cols: cols.filter(Boolean) }
+  const cols: GNode[][] = []
+  for (const d of [...buckets.keys()].sort((a, b) => a - b)) {
+    const b = buckets.get(d)!.sort((x, y) => y.count - x.count)
+    for (let i = 0; i < b.length; i += MAXROW) cols.push(b.slice(i, i + MAXROW))
+  }
+  return { nodes: [...nodes.values()], edges: [...edges.values()], cols }
 })
 
 function open(n: GNode) {
-  if (!level.value && n.count > 1 && n.nodes.some((id) => id.split('.').length > 2)) { level.value = n.key; return }
+  if (!level.value && n.count > 1 && n.nodes.some((id) => id.split('.').length > 2)) { level.value = n.key; focus.value = null; return }
   // node seviyesine in: grubun root'tan erişilen ilk node'u
   const g = graph.value!
   const first = n.nodes.map((id) => ({ id, p: g.pathFromRoots(id) })).filter((x) => x.p).sort((a, b) => a.p!.length - b.p!.length)[0]
@@ -65,35 +111,48 @@ function draw() {
   const sr = st.getBoundingClientRect()
   const pos = new Map<string, DOMRect>()
   for (const el of st.querySelectorAll<HTMLElement>('.gcard')) pos.set(el.dataset.key!, el.getBoundingClientRect())
+  const f = focus.value
   const parts: string[] = []
+  const near = new Set<string>()
   for (const e of model.value.edges) {
+    const hot = !!f && (e.from === f || e.to === f)
+    if (f && !hot) continue
     const A = pos.get(e.from), B = pos.get(e.to); if (!A || !B) continue
+    if (hot) { near.add(e.from); near.add(e.to) }
     const back = B.left < A.left
     const ax = (back ? A.left : A.right) - sr.left, ay = A.top + A.height / 2 - sr.top
     const bx = (back ? B.right : B.left) - sr.left, by = B.top + B.height / 2 - sr.top
     const mx = (ax + bx) / 2
-    const w = Math.min(6, 1 + Math.log2(e.n + 1))
-    parts.push(`<path d="M${ax},${ay} C${mx},${ay} ${mx},${by} ${bx},${by}" fill="none" stroke="var(--edge)" stroke-width="${w}" opacity=".6" ${back ? 'stroke-dasharray="6 5"' : ''}/>`)
-    parts.push(`<text x="${mx}" y="${(ay + by) / 2 - 4}" text-anchor="middle">${e.n}</text>`)
+    const w = Math.min(5, 1 + Math.log2(e.n + 1))
+    const color = !hot ? 'var(--edge)' : e.from === f ? 'var(--api)' : 'var(--ui)'
+    parts.push(`<path d="M${ax},${ay} C${mx},${ay} ${mx},${by} ${bx},${by}" fill="none" stroke="${color}" stroke-width="${w}" opacity="${hot ? .9 : .16}" ${back ? 'stroke-dasharray="6 5"' : ''}/>`)
+    if (hot) parts.push(`<text x="${mx}" y="${(ay + by) / 2 - 4}" text-anchor="middle">${e.n}</text>`)
   }
   s.innerHTML = parts.join('')
+  for (const el of st.querySelectorAll<HTMLElement>('.gcard')) {
+    const k = el.dataset.key!
+    el.classList.toggle('dim', !!f && k !== f && !near.has(k))
+    el.classList.toggle('hot', k === f)
+  }
 }
 onMounted(() => nextTick(draw))
 watch(model, () => nextTick(draw))
+watch(focus, draw)
 window.addEventListener('resize', draw)
 </script>
 
 <template>
   <div class="map" ref="stage">
     <div class="crumbs">
-      <button @click="level = null" :class="{ on: !level }">{{ graph?.data.project.name }}</button>
+      <button @click="level = null; focus = null" :class="{ on: !level }">{{ graph?.data.project.name }}</button>
       <template v-if="level"><span>›</span><button class="on">{{ level }}</button></template>
-      <span class="hint">click a group card to enter · Walk starts at node level</span>
+      <span class="hint">hover a card to trace its edges · click to enter</span>
     </div>
     <svg ref="svg" class="wires"></svg>
     <div class="cols">
       <div class="col" v-for="(col, i) in model.cols" :key="i">
-        <button v-for="n in col" :key="n.key" class="gcard" :data-key="n.key" @click="open(n)">
+        <button v-for="n in col" :key="n.key" class="gcard" :data-key="n.key" @click="open(n)"
+          @mouseenter="focus = n.key" @mouseleave="focus = null">
           <div class="head"><span class="mono">{{ n.label }}</span><span class="count">{{ n.count }}</span></div>
           <div class="bars">
             <span v-for="(c, l) in n.layers" :key="l" class="bar" :data-layer="l" :style="{ flex: c }" :title="`${l}: ${c}`"></span>
@@ -116,13 +175,14 @@ window.addEventListener('resize', draw)
 .crumbs .hint { margin-left: auto; font-size: 12px; color: var(--faint); }
 .wires { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .wires :deep(text) { font: 11px "Instrument Sans", system-ui, sans-serif; fill: var(--muted); paint-order: stroke; stroke: var(--bg); stroke-width: 4px; }
-.cols { display: flex; gap: 90px; align-items: flex-start; position: relative; z-index: 1; }
-.col { display: flex; flex-direction: column; gap: 16px; width: 200px; }
-.gcard { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; text-align: left; display: flex; flex-direction: column; gap: 8px; transition: border-color .18s, box-shadow .18s; }
-.gcard:hover { border-color: var(--text); box-shadow: var(--shadow); }
-.head { display: flex; justify-content: space-between; font-size: 13px; }
-.head .count { color: var(--muted); font-size: 12px; }
-.bars { display: flex; height: 4px; border-radius: 2px; overflow: hidden; gap: 1px; }
+.cols { display: flex; gap: 64px; align-items: flex-start; position: relative; z-index: 1; }
+.col { display: flex; flex-direction: column; gap: 10px; width: 156px; }
+.gcard { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; text-align: left; display: flex; flex-direction: column; gap: 6px; transition: border-color .18s, opacity .18s, box-shadow .18s; }
+.gcard.dim { opacity: .2; }
+.gcard.hot, .gcard:hover { border-color: var(--text); box-shadow: var(--shadow); }
+.head { display: flex; justify-content: space-between; font-size: 12px; }
+.head .count { color: var(--muted); font-size: 11px; }
+.bars { display: flex; height: 3px; border-radius: 2px; overflow: hidden; gap: 1px; }
 .bar { background: var(--faint); }
 .bar[data-layer="ui"] { background: var(--ui); } .bar[data-layer="api"] { background: var(--api); } .bar[data-layer="domain"] { background: var(--domain); }
 .diff { display: flex; gap: 4px; }
